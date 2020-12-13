@@ -27,12 +27,11 @@ A very simple example:
 
 int main() {
 	std::promise<void> f;
-	auto c = std::make_shared<simple_rpc::rpc_client>();
+	auto c = std::make_shared<lite_rpc::rpc_client>();
 	c->connect_async("10.10.0.96", "31236", 5, [&f]() {
 		f.set_value();
 	});
 	
-	std::vector<std::shared_ptr<simple_rpc::rpc_client>> client;
 	c->remote_call_async("echo_echo_echo_echo", "", [](std::string&& res) {
 		printf("res:%s\n", res.c_str());
 	});
@@ -47,7 +46,7 @@ client printf   this is echo_echo_echo_echo res
 #include "rpc_server.hpp"
 int main() {
 	auto parallel_num = std::thread::hardware_concurrency();
-	auto rpc_server = std::make_shared<simple_rpc::rpc_server<simple_rpc::empty_resource>>(31236);
+	auto rpc_server = std::make_shared<lite_rpc::rpc_server<simple_rpc::empty_resource>>(31236);
 	rpc_server->register_method("echo_echo_echo_echo", []() {
 		return std::string("this is echo_echo_echo_echo res");
 	});
