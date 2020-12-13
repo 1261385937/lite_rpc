@@ -20,7 +20,7 @@ The lib do not need to compile, headonly.
 
 ## Usage
 A very simple example:
-client:
+</br>client:
 ```c++
 #include <future>
 #include "rpc_client.hpp"
@@ -34,13 +34,15 @@ int main() {
 	
 	std::vector<std::shared_ptr<simple_rpc::rpc_client>> client;
 	c->remote_call_async("echo_echo_echo_echo", "", [](std::string&& res) {
-		printf("res:%s\n", res.c_str()); //this is echo_echo_echo_echo res
+		printf("res:%s\n", res.c_str());
 	});
 	getchar();
 	return 0;
 }
 ```
-server:
+</br>client printf   this is echo_echo_echo_echo res
+</br>
+</br>server:
 ```c++
 #include "rpc_server.hpp"
 int main() {
