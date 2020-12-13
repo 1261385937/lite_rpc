@@ -40,7 +40,7 @@ int main() {
 	return 0;
 }
 ```
-</br>client printf   this is echo_echo_echo_echo res
+client printf   this is echo_echo_echo_echo res
 </br>
 </br>server:
 ```c++
