@@ -46,7 +46,7 @@ client printf   this is echo_echo_echo_echo res
 #include "rpc_server.hpp"
 int main() {
 	auto parallel_num = std::thread::hardware_concurrency();
-	auto rpc_server = std::make_shared<lite_rpc::rpc_server<simple_rpc::empty_resource>>(31236);
+	auto rpc_server = std::make_shared<lite_rpc::rpc_server<lite_rpc::empty_resource>>(31236);
 	rpc_server->register_method("echo_echo_echo_echo", []() {
 		return std::string("this is echo_echo_echo_echo res");
 	});
