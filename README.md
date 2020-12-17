@@ -31,6 +31,7 @@ int main() {
 	c->connect_async("10.10.0.96", "31236", 5, [&f]() {
 		f.set_value();
 	});
+	f.get_future().get();
 	
 	c->remote_call_async("echo_echo_echo_echo", "", [](std::string&& res) {
 		printf("res:%s\n", res.c_str());
