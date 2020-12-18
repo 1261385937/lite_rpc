@@ -74,8 +74,7 @@ int main() {
 	return 0;
 }
 ```
-</br>
-</br>server:
+</br>server code:
 ```c++
 #include "rpc_server.hpp"
 #include "rpc_define.h"
