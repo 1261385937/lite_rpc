@@ -22,7 +22,7 @@ The lib do not need to compile, headonly.
 </br>Boost.asio is not under the contrib dir, you should get it by yourself. MessagePack c++ and zstd is under the contrib dir.
 
 ## Usage
-A very simple example:
+A very simple example: 
 </br>a common header file which is used for defining common data structure. Recommend this very strongly. It will make no error espacially for weak type rpc.
 </br>
 </br>rpc_define.h 
