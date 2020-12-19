@@ -24,7 +24,9 @@ The lib do not need to compile, headonly.
 ## Usage
 A very simple example:
 </br>a common header file which is used for defining common data structure. Recommend this very strongly. It will make no error espacially for weak type rpc.
-</br>For example: rpc_define.h
+</br>
+</br>For example:
+</br>rpc_define.h
 ```c++
 #pragma once
 #include "rpc_common.hpp"
@@ -43,7 +45,7 @@ using example_struct_res = std::string;
 using example_tuple_req = std::tuple<int, std::string, std::string>; //Recommend this, do not need MSGPACK_DEFINE.
 using example_tuple_res = example_struct;
 ```
-</br>client code:
+</br>client code
 ```c++
 #include <future>
 #include "rpc_client.hpp"
@@ -76,7 +78,7 @@ int main() {
 	return 0;
 }
 ```
-</br>server code:
+</br>server code
 ```c++
 #include "rpc_server.hpp"
 #include "rpc_define.h"
