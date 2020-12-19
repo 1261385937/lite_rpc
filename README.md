@@ -25,7 +25,6 @@ The lib do not need to compile, headonly.
 A very simple example:
 </br>a common header file which is used for defining common data structure. Recommend this very strongly. It will make no error espacially for weak type rpc.
 </br>
-</br>For example:
 </br>rpc_define.h
 ```c++
 #pragma once
