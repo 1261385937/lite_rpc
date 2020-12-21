@@ -153,7 +153,7 @@ namespace lite_rpc {
 					con_cb();
 				}
 			});
-		
+
 			//initiative timeout then close socket if connect time is too long
 			timer_.expires_from_now(std::chrono::seconds(timeout_s_));
 			timer_.async_wait([this](const boost::system::error_code& ec) {
@@ -221,7 +221,7 @@ namespace lite_rpc {
 				decompress_length = body.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(compress_detail_, body, pa.inner_buf);
+					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, body, pa.inner_buf);
 				}
 				else {
 #endif
@@ -242,14 +242,14 @@ namespace lite_rpc {
 				decompress_length = seri.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(compress_detail_, seri, pa.inner_buf);
+					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, seri, pa.inner_buf);
 				}
 				else {
 #endif
 					body_length = decompress_length; //do not need compress, the length is same.
 					pa.ext_buf = seri.release();
 #ifdef LITERPC_ENABLE_ZSTD
-				}	
+				}
 #endif
 			}
 

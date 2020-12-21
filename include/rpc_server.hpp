@@ -28,8 +28,8 @@ namespace lite_rpc {
 		const Resource& rc_;
 	private:
 		tcp::socket socket_;
-		boost::asio::steady_timer timer_;
-		boost::asio::strand<boost::asio::io_context::executor_type> strand_;
+		boost::asio::steady_timer kick_timer_;
+		boost::asio::steady_timer notify_timer_;
 		boost::asio::io_context& io_context_;
 		compress_detail& compress_;
 		rpc_server<Resource>* server_;
@@ -51,19 +51,20 @@ namespace lite_rpc {
 		std::unordered_set<std::string> subscribe_keys_;
 #ifdef LITERPC_ENABLE_ZSTD
 		ZSTD_CCtx* cctx_;
-#endif
 		std::mutex cctx_mtx_;
+#endif
 	public:
 		explicit session(boost::asio::io_context& io_context, tcp::socket socket, const Resource& rc, compress_detail& d, rpc_server<Resource>* s)
 			: rc_(rc),
 			socket_(std::move(socket)),
-			timer_(io_context),
-			strand_(io_context.get_executor()),
+			kick_timer_(io_context),
+			notify_timer_(io_context),
 			io_context_(io_context),
 			compress_(d),
 			server_(s)
 		{
 			buf_.resize(4_k);
+			notify_timer_.expires_at(std::chrono::steady_clock::time_point::max());
 #ifdef LITERPC_ENABLE_ZSTD
 			cctx_ = ZSTD_createCCtx();
 #endif
@@ -80,12 +81,12 @@ namespace lite_rpc {
 		void go() {
 			//SPDLOG_INFO("get connection");
 			auto self(this->shared_from_this());
-			boost::asio::spawn(strand_, [this, self](boost::asio::yield_context yield) {
+			boost::asio::spawn(io_context_, [this, self](boost::asio::yield_context yield) {
 				yield_ = &yield;
 				try {
 					char data[sizeof(header)];
 					for (;;) {
-						timer_.expires_from_now(std::chrono::seconds(10));
+						kick_timer_.expires_from_now(std::chrono::seconds(10));
 						boost::asio::async_read(socket_, boost::asio::buffer(data, sizeof(header)), yield);
 						auto head = (header*)data;
 						msg_id_ = head->msg_id;
@@ -99,11 +100,12 @@ namespace lite_rpc {
 						deal(*head);
 					}
 				}
-				catch (std::exception& ) {
+				catch (std::exception&) {
 					//SPDLOG_ERROR("get exception:{}, so server close the connection, session address:{}", e.what(), (uint64_t)this);
 					close_socket();
 					boost::system::error_code ignored_ec;
-					timer_.cancel(ignored_ec);
+					kick_timer_.cancel(ignored_ec);
+					notify_timer_.cancel(ignored_ec);
 
 					//self remove subscribe which in rpc_server sub_conn_
 					for (const auto& key : subscribe_keys_) {
@@ -112,36 +114,51 @@ namespace lite_rpc {
 				}
 			});
 
-			boost::asio::spawn(strand_, [this, self](boost::asio::yield_context yield) {
+			boost::asio::spawn(io_context_, [this, self](boost::asio::yield_context yield) {
+				boost::system::error_code ignored_ec;
 				while (socket_.is_open()) {
-					boost::system::error_code ignored_ec;
-					timer_.async_wait(yield[ignored_ec]);
-					if (timer_.expires_from_now() <= std::chrono::seconds(0)) {
+					kick_timer_.async_wait(yield[ignored_ec]);
+					if (kick_timer_.expires_from_now() <= std::chrono::seconds(0)) {
 						close_socket();
 						//SPDLOG_INFO("the connection is quiet over 10s, server close the connection, session address:{}", (uint64_t)this);
 					}
 				}
 				//SPDLOG_INFO("timer quit, session address:{}", (uint64_t)this);
 			});
+
+			boost::asio::spawn(io_context_, [this, self](boost::asio::yield_context yield) {
+				boost::system::error_code ignored_ec;
+				while (socket_.is_open()) {
+					std::unique_lock<std::mutex> l(mtx_);
+					if (send_queue_.empty()) {
+						l.unlock();
+						notify_timer_.async_wait(yield[ignored_ec]);
+					}
+					else {
+						l.unlock();
+						coro_send(yield, ignored_ec);
+					}
+				}
+			});
 		}
 
-		template<request_type ReqType = request_type::req_res, typename String, typename BodyType>
-		void respond(String&& key, BodyType&& data, uint64_t msg_id) {
-			this->write<ReqType>(std::forward<String>(key), std::forward<BodyType>(data), msg_id);
-		}
-
-		template<request_type ReqType = request_type::req_res, typename BodyType>
-		void respond(BodyType&& data, uint64_t msg_id) {
-			this->write<ReqType>(std::string{}, std::forward<BodyType>(data), msg_id);
+		template<typename String, typename BodyType>
+		void publish(String&& key, BodyType&& body) {
+			this->write<request_type::sub_pub>(std::forward<String>(key), std::forward<BodyType>(body), 0);
 		}
 
 		template<typename BodyType>
-		void inner_respond(BodyType&& data) {
-			this->inner_write(std::forward<BodyType>(data), msg_id_, *yield_);
+		void respond(BodyType&& data, uint64_t msg_id) {
+			this->write<request_type::req_res>(std::string{}, std::forward<BodyType>(data), msg_id);
 		}
 
-		void inner_respond() {
-			this->inner_write(std::string{}, msg_id_, *yield_);
+		template<typename BodyType>
+		void coro_respond(BodyType&& data) {
+			this->coro_write(std::forward<BodyType>(data), msg_id_, *yield_);
+		}
+
+		void coro_respond() {
+			this->coro_write(std::string{}, msg_id_, *yield_);
 		}
 
 		auto get_msg_id() {
@@ -219,6 +236,37 @@ namespace lite_rpc {
 			});
 		}
 
+		void coro_send(boost::asio::yield_context& yield, boost::system::error_code& ec) //for one session ,producer maybe more than one, but consumer must be only one.
+		{
+			std::unique_lock<std::mutex> l(mtx_);
+			auto& msg = send_queue_.front();
+			l.unlock();
+
+			std::vector<boost::asio::const_buffer> write_buffers;
+			write_buffers.emplace_back(boost::asio::buffer((char*)&msg.head, sizeof(header)));
+			if (!msg.name.empty()) {
+				write_buffers.emplace_back(boost::asio::buffer(msg.name.data(), msg.name.length()));
+			}
+			if (msg.ext_buf != nullptr) {//ext serialize buf
+				write_buffers.emplace_back(boost::asio::buffer(msg.ext_buf, msg.buf_size));
+			}
+			else if (!msg.inner_buf.empty()) {
+				write_buffers.emplace_back(boost::asio::buffer(msg.inner_buf.data(), msg.buf_size));
+			}
+
+			boost::asio::async_write(socket_, write_buffers, yield[ec]);
+			if (ec) {
+				close_socket();
+				return;
+			}
+
+			std::unique_lock<std::mutex> lock(mtx_);
+			if (send_queue_.front().ext_buf != nullptr) { //need free extra buf
+				::free(send_queue_.front().ext_buf);
+			}
+			send_queue_.pop_front();
+		}
+
 		template<request_type ReqType, typename String, typename BodyType>
 		void write(String&& key, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
@@ -231,7 +279,7 @@ namespace lite_rpc {
 				decompress_length = body.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(compress_, body, pa.inner_buf);
+					body_length = compress_with_mutex(cctx_, cctx_mtx_, body, pa.inner_buf);
 				}
 				else {
 #endif
@@ -247,12 +295,26 @@ namespace lite_rpc {
 				}
 #endif
 			}
+			else if constexpr (lite_rpc::is_char_array_v<T>) {
+				decompress_length = sizeof(body) - 1;
+#ifdef LITERPC_ENABLE_ZSTD
+				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress_with_mutex(cctx_, cctx_mtx_, std::string_view{ body,decompress_length }, pa.inner_buf);
+				}
+				else {
+#endif
+					pa.inner_buf = body;
+					body_length = pa.inner_buf.length();
+#ifdef LITERPC_ENABLE_ZSTD
+				}
+#endif
+			}
 			else { //need serialize
 				auto seri = serialize(std::forward<BodyType>(body));
 				decompress_length = seri.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(compress_, seri, pa.inner_buf);
+					body_length = compress_with_mutex(cctx_, cctx_mtx_, seri, pa.inner_buf);
 				}
 				else {
 #endif
@@ -262,7 +324,6 @@ namespace lite_rpc {
 				}
 #endif
 			}
-
 			pa.buf_size = (uint32_t)body_length;
 			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint16_t)key.length());
 			pa.name = std::move(key);
@@ -270,14 +331,15 @@ namespace lite_rpc {
 			std::unique_lock<std::mutex> lock(mtx_);
 			send_queue_.emplace_back(std::move(pa));
 			if (send_queue_.size() > 1) {
-				return; //write was begined, it will send all send_queue_ data in async_write callback step by step.
+				return; //once write is begining, it will send all send_queue_ data  step by step.
 			}
 			lock.unlock();
-			send();
+			//send();
+			notify_timer_.cancel_one();
 		}
 
 		template<typename BodyType>
-		void inner_write(BodyType&& body, uint64_t msg_id, boost::asio::yield_context& yield) {
+		void coro_write(BodyType&& body, uint64_t msg_id, boost::asio::yield_context& yield) {
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
 			std::string_view buf{};
@@ -290,6 +352,14 @@ namespace lite_rpc {
 				buf = compress(compress_, { body.data(), body.size() });
 #else
 				buf = { body.data(), body.size() };
+#endif
+			}
+			else if constexpr (lite_rpc::is_char_array_v<T>) {
+				decompress_length = sizeof(body) - 1;
+#ifdef LITERPC_ENABLE_ZSTD
+				buf = compress(compress_, { body, decompress_length });
+#else
+				buf = { body, decompress_length };
 #endif
 			}
 			else {
@@ -309,7 +379,6 @@ namespace lite_rpc {
 			if (!buf.empty()) {
 				write_buffers.emplace_back(boost::asio::buffer(const_cast<char*>(buf.data()), head.body_length));
 			}
-
 			boost::system::error_code ec;
 			boost::asio::async_write(socket_, write_buffers, yield[ec]);
 			if (ec) {
@@ -349,7 +418,7 @@ namespace lite_rpc {
 			}
 
 			for (const auto& sess : iter->second) {
-				sess->template respond<request_type::sub_pub>(key, body, 0);
+				sess->publish(key, body);
 			}
 		}
 
@@ -420,19 +489,19 @@ namespace lite_rpc {
 					if constexpr (std::is_same_v<Object, void>) {
 						if constexpr (std::is_same_v<return_type, void>) {
 							handler(std::forward<decltype(args)>(args)...);
-							sess.lock()->inner_respond();
+							sess.lock()->coro_respond();
 						}
 						else {
-							sess.lock()->inner_respond(handler(std::forward<decltype(args)>(args)...));
+							sess.lock()->coro_respond(handler(std::forward<decltype(args)>(args)...));
 						}
 					}
 					else {
 						if constexpr (std::is_same_v<return_type, void>) {
 							(*obj.*handler)(std::forward<decltype(args)>(args)...);
-							sess.lock()->inner_respond();
+							sess.lock()->coro_respond();
 						}
 						else {
-							sess.lock()->inner_respond((*obj.*handler)(std::forward<decltype(args)>(args)...));
+							sess.lock()->coro_respond((*obj.*handler)(std::forward<decltype(args)>(args)...));
 						}
 					}
 				};

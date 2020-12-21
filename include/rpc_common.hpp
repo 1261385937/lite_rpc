@@ -1,22 +1,25 @@
 #pragma once
 
-//#define LITERPC_ENABLE_ZSTD
+#define LITERPC_ENABLE_ZSTD
 
 #include "msgpack.hpp"
+
+constexpr decltype(auto) operator""_k(unsigned long long n) {
+	return n * 1024;
+}
+
+constexpr decltype(auto) operator""_m(unsigned long long n) {
+	return n * 1024_k;
+}
+
+
 #ifdef LITERPC_ENABLE_ZSTD
 #include "zstd.h"
-constexpr auto COMPRESS_THRESHOLD = 1 * 1024;//default 1K
+constexpr auto COMPRESS_THRESHOLD = 1_k;//default 1K
 #endif
 
 
 namespace lite_rpc {
-	constexpr decltype(auto) operator""_k(unsigned long long n) {
-		return n * 1024;
-	}
-
-	constexpr decltype(auto) operator""_m(unsigned long long n) {
-		return n * 1024_k;
-	}
 
 	constexpr auto MAX_BODY_SIZE = 128_k;
 
@@ -98,7 +101,7 @@ namespace lite_rpc {
 
 #ifdef LITERPC_ENABLE_ZSTD
 	template<typename SrcType>
-	inline size_t compress_with_mutex(compress_detail& detail, SrcType&& src, std::string& dst)
+	inline size_t compress_with_mutex(ZSTD_CCtx* cctx, std::mutex& mtx, SrcType&& src, std::string& dst)
 	{
 		size_t src_size = src.size();
 		if (src_size < COMPRESS_THRESHOLD) {
@@ -107,8 +110,8 @@ namespace lite_rpc {
 
 		//need compress
 		dst.resize(src_size);
-		std::unique_lock<std::mutex> l(detail.compress_mtx);
-		auto compress_length = ZSTD_compressCCtx(detail.cctx, dst.data(), dst.length(), src.data(), src_size, 10);
+		std::unique_lock<std::mutex> l(mtx);
+		auto compress_length = ZSTD_compressCCtx(cctx, dst.data(), dst.length(), src.data(), src_size, 10);
 		l.unlock();
 		return compress_length;
 	}

@@ -67,12 +67,6 @@ int main() {
 		printf("res:%s\n", res.c_str()); //11+22+33
 	});
 
-	example_tuple_req tuple_req{ 11,"22","33" };
-	c->remote_call_async("example_tuple", tuple_req, [](example_tuple_res&& res) {
-		auto r = std::to_string(res.a) + "+" + std::move(res.b) + "+" + std::move(res.c);
-		printf("res:%s\n",r.c_str()); //11+22+33
-	});
-
 	getchar();
 	return 0;
 }
@@ -88,23 +82,6 @@ int main() {
 
 	rpc_server->register_method("example_struct", [](example_struct_req&& req) {
 		return example_struct_res{ std::to_string(req.a) + "+" + req.b + "+" + req.c };
-	});
-
-	rpc_server->register_method("example_tuple", [](std::weak_ptr<lite_rpc::session<lite_rpc::empty_resource>> sess, example_tuple_req&& req) {
-		auto msg_id = sess.lock()->get_msg_id();
-		std::thread th([sess, msg_id, request = std::move(req)]() mutable{
-			std::this_thread::sleep_for(std::chrono::milliseconds(5000)); //simulate a long task
-			auto conn = sess.lock();
-			if (conn) {
-				auto&& [a, b, c] = std::move(request);
-				example_tuple_res res{};
-				res.a = a;
-				res.b = std::move(b);
-				strcpy_s(res.c, c.data());
-				conn->respond(example_tuple_res{ std::move(res) }, msg_id);
-			}
-		});
-		th.detach();
 	});
 
 	rpc_server->run(parallel_num);
