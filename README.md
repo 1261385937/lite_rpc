@@ -41,7 +41,7 @@ using example_struct_req = example_struct;
 using example_struct_res = std::string;
 
 using example_tuple_req = std::tuple<int, std::string, std::string>; //Recommend this, do not need MSGPACK_DEFINE.
-using example_tuple_res = example_struct;
+using example_tuple_res = std::string;
 ```
 </br>A very simple example about request-response: 
 </br>client code:
@@ -66,6 +66,10 @@ int main() {
 	c->remote_call_async("example_struct", struct_req, [](example_struct_res&& res) {
 		printf("res:%s\n", res.c_str()); //11+22+33
 	});
+	//use tuple instead of struct is better.
+	c->remote_call_async("example_tuple", example_tuple_req{ 11,"22","33" }, [](example_tuple_res&& res) {
+		printf("res:%s\n", res.c_str()); //11+22+33
+	});
 
 	getchar();
 	return 0;
@@ -82,6 +86,11 @@ int main() {
 
 	rpc_server->register_method("example_struct", [](example_struct_req&& req) {
 		return example_struct_res{ std::to_string(req.a) + "+" + req.b + "+" + req.c };
+	});
+
+	rpc_server->register_method("example_tuple", [](example_tuple_req&& req) {
+		auto&& [a, b, c] = std::move(req);
+		return example_tuple_res{ std::to_string(a) + "+" + std::move(b) + "+" + std::move(c) };
 	});
 
 	rpc_server->run(parallel_num);
