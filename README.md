@@ -22,7 +22,6 @@ The lib do not need to compile, headonly.
 </br>Boost.asio is not under the contrib dir, you should get it by yourself. MessagePack c++ and zstd is under the contrib dir.
 
 ## Usage
-A very simple example: 
 </br>a common header file which is used for defining common data structure. Recommend this very strongly. It will make no error espacially for weak type rpc.
 </br>
 </br>rpc_define.h 
@@ -44,7 +43,8 @@ using example_struct_res = std::string;
 using example_tuple_req = std::tuple<int, std::string, std::string>; //Recommend this, do not need MSGPACK_DEFINE.
 using example_tuple_res = example_struct;
 ```
-</br>client code
+</br>A very simple example about request-response: 
+</br>client code:
 ```c++
 #include <future>
 #include "rpc_client.hpp"
@@ -71,7 +71,7 @@ int main() {
 	return 0;
 }
 ```
-</br>server code
+</br>server code:
 ```c++
 #include "rpc_server.hpp"
 #include "rpc_define.h"
@@ -88,4 +88,54 @@ int main() {
 	return 0;
 }
 ```
-Under the example dir, has very detailed examples. 
+
+</br></br>A very simple example about subscribe-publish: 
+</br>client code:
+```c++
+#include <future>
+#include "rpc_client.hpp"
+#include "rpc_define.h"
+
+int main() {
+	std::promise<void> f;
+	auto c = std::make_shared<lite_rpc::rpc_client>();
+	c->connect_async("127.0.0.1", "31236", 5, [&f]() {
+		f.set_value();
+	});
+	f.get_future().get();
+
+
+	c->subscribe("haha", [](example_struct&& ex) {
+		printf("subscribe:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
+
+	getchar();
+	return 0;
+}
+```
+</br>server code:
+```c++
+#include "rpc_server.hpp"
+#include "rpc_define.h"
+
+int main() {
+	auto parallel_num = std::thread::hardware_concurrency();
+	auto rpc_server = std::make_shared<lite_rpc::rpc_server<lite_rpc::empty_resource>>((uint16_t)31236);
+
+	std::thread th([rpc_server]() {
+		example_struct ex{};
+		ex.a = 11;
+		ex.b = "22";
+		strcpy_s(ex.c, "33");
+		while (true) {
+			rpc_server->publish("haha", ex);
+			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+		}
+	});
+	th.detach();
+
+	rpc_server->run(parallel_num);
+	return 0;
+}
+```
+</br>Under the example dir, has very detailed examples. 

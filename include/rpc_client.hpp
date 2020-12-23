@@ -237,6 +237,20 @@ namespace lite_rpc {
 				}
 #endif
 			}
+			else if constexpr (lite_rpc::is_char_array_v<T>) {
+				decompress_length = sizeof(body) - 1;
+#ifdef LITERPC_ENABLE_ZSTD
+				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, std::string_view{ body,decompress_length }, pa.inner_buf);
+				}
+				else {
+#endif
+					pa.inner_buf = body;
+					body_length = pa.inner_buf.length();
+#ifdef LITERPC_ENABLE_ZSTD
+				}
+#endif
+			}
 			else { //need serialize
 				auto seri = serialize(std::forward<BodyType>(body));
 				decompress_length = seri.size();
