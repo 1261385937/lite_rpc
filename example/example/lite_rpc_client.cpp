@@ -48,7 +48,7 @@ int main() {
 	f.get_future().get();
 
 	c->subscribe("haha", [](example_struct&& ex) {
-		printf("subscribe:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+		printf("subscribe haha res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
 
 	example_struct_req struct_req{};
@@ -56,12 +56,12 @@ int main() {
 	struct_req.b = "22";
 	strcpy_s(struct_req.c, "33");
 	c->remote_call_async("example_struct", struct_req, [](example_struct_res&& res) {
-		printf("res:%s\n", res.c_str()); //11+22+33
+		printf("example_struct res:%s\n", res.c_str()); //11+22+33
 	});
 
 	//use tuple instead of struct is better.
 	c->remote_call_async("example_tuple", example_tuple_req{ 11,"22","33" }, [](example_tuple_res&& res) {
-		printf("res:%s\n", res.c_str()); //11+22+33
+		printf("example_tuple res:%s\n", res.c_str()); //11+22+33
 	});
 
 	//no res from server
@@ -69,13 +69,12 @@ int main() {
 
 	//call class member func, no req to server
 	c->remote_call_async("get_server_msg", "", [](get_server_msg_res&& res) {
-		printf("server_ms is %s\n", res.c_str());
+		printf("get_server_msg res: %s\n", res.c_str());
 	});
 
 	//call method <async_response>, the method is async in server endpoint.
 	c->remote_call_async("async_response", async_response_req{ 1 }, [](async_response_res&& res) {
-		printf("async_response result is %d\n", res);
-
+		printf("async_response res: %d\n", res);
 	});
 
 
@@ -85,6 +84,11 @@ int main() {
 		f_res.set_value(res);
 	});
 	auto r = f_res.get_future().get(); //get the result use sync
+
+	//server side use Resource
+	c->remote_call_async("resource", "", [&f_res](resource_res&& res) {
+		printf("resource res: %s\n", res.c_str());
+	});
 
 	getchar();
 	return 0;

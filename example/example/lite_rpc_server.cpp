@@ -10,15 +10,25 @@ void printf_req(example_tuple_req&& req) {
 class server {
 public:
 	auto get_server_msg() {
-		return get_server_msg_res{ "this is server abouit test" };
+		return get_server_msg_res{ "this is server" };
 	}
 };
 
 
+struct common_resource {
+	std::string connection_pool = "connection_pool";
+	std::string thread_pool = "thread_pool";
+};
+
 int main() {
 	auto parallel_num = std::thread::hardware_concurrency();
-	auto rpc_server = std::make_shared<lite_rpc::rpc_server<lite_rpc::empty_resource>>((uint16_t)31236);
+	//auto rpc_server = std::make_shared<lite_rpc::rpc_server<lite_rpc::empty_resource>>((uint16_t)31236);
 
+	std::vector<common_resource> res(parallel_num);
+	auto rpc_server = std::make_shared<lite_rpc::rpc_server<common_resource>>((uint16_t)31236, res);
+
+
+	//pubish every 3s
 	std::thread th([rpc_server]() {
 		example_struct ex{};
 		ex.a = 11;
@@ -46,7 +56,7 @@ int main() {
 	rpc_server->register_method("get_server_msg", &server::get_server_msg, &s);
 
 	//simulate a async response
-	rpc_server->register_method("async_response", [](std::weak_ptr<lite_rpc::session<lite_rpc::empty_resource>> sess, async_response_req&& req) {
+	rpc_server->register_method("async_response", [](std::weak_ptr<lite_rpc::session<common_resource>> sess, async_response_req&& req) {
 		auto id = sess.lock()->get_msg_id();
 		std::thread th([request = std::move(req), sess, id]() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
@@ -61,6 +71,11 @@ int main() {
 
 	rpc_server->register_method("client_sync_call", [](client_sync_call_req&& req) {
 		return client_sync_call_res{ req };
+	});
+
+	rpc_server->register_method("resource", [](std::weak_ptr<lite_rpc::session<common_resource>> sess, const common_resource& rc) {
+		//still in corotinue
+		sess.lock()->coro_respond(resource_res{ rc.connection_pool + " " + rc.thread_pool });
 	});
 
 	rpc_server->run(parallel_num);

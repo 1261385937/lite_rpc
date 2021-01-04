@@ -566,6 +566,9 @@ namespace lite_rpc {
 								direct_response(rc, deserialize<arg_type_2>(data.data(), data.length()));
 							}
 						}
+						else {
+							static_assert(always_false_v<Resource>, "args type do not match");
+						}
 					}
 					else if constexpr (arg_size == 3) {//std::weak_ptr<session<Resource>> and resource and data from client
 						using arg_type_1 = std::tuple_element_t<0, req_type>;

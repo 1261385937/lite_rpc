@@ -22,3 +22,6 @@ using async_response_res = int;
 
 using client_sync_call_req = double;
 using client_sync_call_res = double;
+
+using resource_req = std::string;
+using resource_res = std::string;
