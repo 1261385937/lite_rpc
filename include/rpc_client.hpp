@@ -207,6 +207,16 @@ namespace lite_rpc {
 			this->write<request_type::sub_pub>(std::move(key), std::string{}, 0);
 		}
 
+		//for reconnect
+		void re_subscribe() {
+			std::lock_guard<std::mutex> l(sub_cb_mtx_);
+			for (const auto& sub : sub_cb_map_) {
+				const auto& key = sub.first;
+				write<request_type::sub_pub>(key, std::string{}, 0);
+			}
+			send();
+		}
+
 	private:
 
 		template<request_type ReqType = request_type::req_res, typename String, typename BodyType>
@@ -314,15 +324,6 @@ namespace lite_rpc {
 			return temp_id;
 		}
 
-		//for reconnect
-		void re_subscribe() {
-			std::lock_guard<std::mutex> l(sub_cb_mtx_);
-			for (const auto& sub : sub_cb_map_) {
-				const auto& key = sub.first;
-				write<request_type::sub_pub>(key, std::string{}, 0);
-			}
-		}
-
 		void send() {
 			std::unique_lock<std::mutex> l(send_queue_mtx_);
 			auto& msg = send_queue_.front();
@@ -348,7 +349,7 @@ namespace lite_rpc {
 					//here send_queue_ size must be >=1, so after re_subscribe, need to send initiatively
 					connect_async(ip_, port_, timeout_s_, [this]() {
 						re_subscribe();
-						this->send();
+						//this->send();
 					});
 					return;
 				}
