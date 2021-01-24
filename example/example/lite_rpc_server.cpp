@@ -78,6 +78,24 @@ int main() {
 		sess.lock()->coro_respond(resource_res{ rc.connection_pool + " " + rc.thread_pool });
 	});
 
+	rpc_server->register_method("sess", [](std::weak_ptr<lite_rpc::session<common_resource>> sess) {
+		//still in corotinue
+		sess.lock()->coro_respond(sess_res{ "this is test sess" });
+	});
+
+	rpc_server->register_method("rc", [](const common_resource& rc) {
+		return rc_res{ "this is test rc " } + rc.connection_pool + " " + rc.thread_pool;
+	});
+
+	rpc_server->register_method("rc_req", [](const common_resource& rc, rc_req_req&& req) {
+		return rc_res{ "this is test rc_req " } + rc.connection_pool + " " + rc.thread_pool + " " + std::to_string(req);
+	});
+
+	rpc_server->register_method("sess_rc_req", [](std::weak_ptr<lite_rpc::session<common_resource>> sess, const common_resource& rc, sess_rc_req_req&& req) {
+		auto conn = sess.lock();
+		conn->respond(sess_rc_req_res{ "this is test sess_rc_req " } + rc.connection_pool + " " + rc.thread_pool + " " + std::to_string(req), conn->get_msg_id());
+	});
+
 	rpc_server->run(parallel_num);
 	return 0;
 }

@@ -25,3 +25,13 @@ using client_sync_call_res = double;
 
 using resource_req = std::string;
 using resource_res = std::string;
+
+using sess_res = std::string;
+
+using rc_res = std::string;
+
+using rc_req_req = int;
+using rc_req_res = std::string;
+
+using sess_rc_req_req = double;
+using sess_rc_req_res = std::string;;

@@ -47,6 +47,15 @@ int main() {
 	});
 	f.get_future().get();
 
+
+	c->set_disconnect_callback([c]() {
+		printf("conn lost, reconn\n");
+
+		c->connect_async("127.0.0.1", "31236", 5, [c]() {
+			c->re_subscribe();
+		});
+	});
+
 	c->subscribe("haha", [](example_struct&& ex) {
 		printf("subscribe haha res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
@@ -86,10 +95,34 @@ int main() {
 	auto r = f_res.get_future().get(); //get the result use sync
 
 	//server side use Resource
-	c->remote_call_async("resource", "", [&f_res](resource_res&& res) {
+	c->remote_call_async("resource", "", [](resource_res&& res) {
 		printf("resource res: %s\n", res.c_str());
 	});
 
+	//
+	c->remote_call_async("sess", "", [](sess_res&& res) {
+		printf("sess res: %s\n", res.c_str());
+	});
+
+	//
+	c->remote_call_async("rc", "", [](rc_res&& res) {
+		printf("rc res: %s\n", res.c_str());
+	});
+
+	//
+	c->remote_call_async("rc_req", rc_req_req{ 3 }, [](rc_req_res&& res) {
+		printf("rc_req res: %s\n", res.c_str());
+	});
+
+	//
+	c->remote_call_async("sess_rc_req", sess_rc_req_req{ 3.69 }, [](sess_rc_req_res&& res) {
+		printf("sess_rc_req res: %s\n", res.c_str());
+	});
+
+	while (true)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
 	getchar();
 	return 0;
 }
