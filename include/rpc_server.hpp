@@ -144,14 +144,14 @@ namespace lite_rpc {
 			});
 		}
 
-		template<typename String, typename BodyType>
-		void publish(String&& key, BodyType&& body) {
-			this->write<request_type::sub_pub>(std::forward<String>(key), std::forward<BodyType>(body), 0);
+		template<typename String_top, typename String_tag, typename BodyType>
+		void publish(String_top&& topic, String_tag&& tag, BodyType&& body) {
+			this->write<request_type::sub_pub>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), 0);
 		}
 
 		template<typename BodyType>
 		void respond(BodyType&& data, uint64_t msg_id) {
-			this->write<request_type::req_res>(std::string{}, std::forward<BodyType>(data), msg_id);
+			this->write<request_type::req_res>(std::string{}, std::string{}, std::forward<BodyType>(data), msg_id);
 		}
 
 		template<typename BodyType>
@@ -182,7 +182,7 @@ namespace lite_rpc {
 			//sub_pub
 			if (head.req_type == request_type::sub_pub) {
 				auto topic_hash = std::hash<std::string>()(name);
-				auto tags_hash = split_tag(buf);
+				auto tags_hash = split_tag_hash(buf);
 				server_->add_subscribe(topic_hash, tags_hash, this);
 
 				auto iter = subscribe_keys_hash_.find(topic_hash);
@@ -285,8 +285,8 @@ namespace lite_rpc {
 			send_queue_.pop_front();
 		}
 
-		template<request_type ReqType, typename String, typename BodyType>
-		void write(String&& key, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
+		template<request_type ReqType, typename String_top, typename String_tag, typename BodyType>
+		void write(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
 			size_t decompress_length = 0;
@@ -343,8 +343,8 @@ namespace lite_rpc {
 #endif
 			}
 			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)key.length());
-			pa.name = std::move(key);
+			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)topic.length(), (uint16_t)tag.length());
+			pa.name = std::forward<String_top>(topic) + std::forward<String_tag>(tag);
 
 			std::unique_lock<std::mutex> lock(mtx_);
 			send_queue_.emplace_back(std::move(pa));
@@ -434,13 +434,13 @@ namespace lite_rpc {
 			if (iter == sub_conn_.end()) { //none
 				return;
 			}
-			
+
 			auto& tag_conn = iter->second;
 			//tag is *
 			auto tag_iter = tag_conn.find(GLOBBING_HASH);
 			if (tag_iter != tag_conn.end()) {
 				for (const auto& sess : tag_iter->second) {
-					sess->publish(topic, body);
+					sess->publish(topic, std::string("*"), body);
 				}
 			}
 
@@ -450,7 +450,7 @@ namespace lite_rpc {
 				return;
 			}
 			for (const auto& sess : tag_iter->second) {
-				sess->publish(topic, body);
+				sess->publish(topic, tag, body);
 			}
 		}
 
@@ -484,7 +484,7 @@ namespace lite_rpc {
 			if (iter == sub_conn_.end()) {
 				return;
 			}
-			
+
 			auto& tag_conn = iter->second;
 			auto iter1 = tag_conn.find(tag_hash);
 			if (iter1 == tag_conn.end()) {
@@ -494,6 +494,9 @@ namespace lite_rpc {
 			iter1->second.erase(sess);
 			if (iter1->second.empty()) {
 				tag_conn.erase(iter1);
+			}
+			if (tag_conn.empty()) {
+				sub_conn_.erase(iter);
 			}
 		}
 

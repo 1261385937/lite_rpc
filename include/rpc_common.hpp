@@ -82,7 +82,7 @@ namespace lite_rpc {
 		}
 	}
 
-	inline auto split_tag(std::string_view tags) {
+	inline auto split_tag_hash(std::string_view tags) {
 		std::vector<size_t> tags_hash;
 		auto pos = tags.find("||");
 		while (pos != std::string_view::npos) {

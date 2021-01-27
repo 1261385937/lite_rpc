@@ -130,7 +130,7 @@ namespace lite_rpc {
 						for (;;) {
 							boost::asio::async_read(socket_, boost::asio::buffer(data, sizeof(header)), yield);
 							auto head = (header*)data;
-							auto length = head->name_length + head->body_length;
+							auto length = head->name_length + head->tag_length + head->body_length;
 							if (buf_.size() < length) {
 								buf_.resize(length);
 							}
@@ -196,7 +196,8 @@ namespace lite_rpc {
 							try {
 								cb(deserialize<first_arg_type>(data.data(), data.length()));
 							}
-							catch (const std::invalid_argument&) {
+							catch (const std::invalid_argument&e) {
+								printf("deserialize %s\n", e.what());
 								//SPDLOG_ERROR(e.what());
 							}
 						}
@@ -391,17 +392,26 @@ namespace lite_rpc {
 
 		void deal(const header& h) {
 			if (h.req_type == request_type::sub_pub) {
-				auto key = std::string(buf_.data(), h.name_length);
+				auto topic = std::string(buf_.data(), h.name_length);
+				auto tag = std::string(buf_.data() + h.name_length, h.tag_length);
+				printf("%s %s\n", topic.data(), tag.data());
 #ifdef LITERPC_ENABLE_ZSTD
-				auto buf = decompress(compress_detail_, { buf_.data() + h.name_length, h.body_length }, h.decompress_length);
+				auto buf = decompress(compress_detail_, { buf_.data() + h.name_length + h.tag_length, h.body_length }, h.decompress_length);
 #else
-				auto buf = std::string_view{ buf_.data() + h.name_length, h.body_length };
+				auto buf = std::string_view{ buf_.data() + h.name_length + h.tag_length, h.body_length };
 #endif
 				std::unique_lock<std::mutex> lock(sub_cb_mtx_);
-				auto iter = sub_cb_map_.find(key);
-				//if (iter != sub_cb_map_.end()) {
-				//	iter->second(buf);
-				//}
+				auto iter = sub_cb_map_.find(topic);
+				if (iter == sub_cb_map_.end()) {
+					return;
+				}
+
+				auto& tag_func = iter->second;
+				//dispatch with tag
+				auto tag_func_iter = tag_func.find(tag);
+				if (tag_func_iter != tag_func.end()) {
+					tag_func_iter->second(buf);
+				}
 				return;
 			}
 

@@ -56,9 +56,15 @@ int main() {
 		});
 	});
 
-	c->subscribe("haha", "aa||bb||cc||dd", [](example_struct&& ex) {
-		printf("subscribe haha res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
+		printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
+	c->subscribe("haha", "ee||ff", [](example_struct&& ex) {
+		printf("subscribe haha tag<ee||ff> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
+	/*c->subscribe("haha", "*", [](example_struct&& ex) {
+		printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});*/
 
 	example_struct_req struct_req{};
 	struct_req.a = 11;
