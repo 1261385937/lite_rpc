@@ -2,6 +2,7 @@
 
 #define LITERPC_ENABLE_ZSTD
 
+#include <string>
 #include "msgpack.hpp"
 
 constexpr decltype(auto) operator""_k(unsigned long long n) {
@@ -21,6 +22,7 @@ constexpr auto COMPRESS_THRESHOLD = 1_k;//default 1K
 
 namespace lite_rpc {
 
+	inline const auto GLOBBING_HASH = std::hash<std::string>()("*");
 	constexpr auto MAX_BODY_SIZE = 128_k;
 
 	enum class protocol_major :uint8_t { //for protocol version
@@ -41,15 +43,16 @@ namespace lite_rpc {
 		uint64_t msg_id; //increase 1 by every request, use for client request callback.
 		protocol_major major;
 		protocol_minor minor;
-		uint16_t name_length; //for remote method name or subscribe key name
+		uint16_t tag_length; //for subscribe tag
 		uint32_t decompress_length; //if decompress_length equal body_length means the body is not compressed.
 		uint32_t body_length;
 		request_type req_type;
-		uint8_t reserve1 = 0;  //unused, now for byte align
+		uint8_t name_length = 0; //for remote method name or subscribe topic name
 		uint16_t reserve2 = 0; //unused, now for byte align
 	};
 
-	inline void make_head_v1_0(header& h, uint32_t decompress_length, uint32_t body_len, uint64_t id, request_type req_type, uint16_t name_length)
+	inline void make_head_v1_0(header& h, uint32_t decompress_length, uint32_t body_len,
+		uint64_t id, request_type req_type, uint8_t name_length, uint16_t tag_length = 0)
 	{
 		h.msg_id = id;
 		h.major = protocol_major::first;
@@ -58,17 +61,18 @@ namespace lite_rpc {
 		h.body_length = body_len;
 		h.req_type = req_type;
 		h.name_length = name_length;
+		h.tag_length = tag_length;
 	}
 
 	template<typename T>
-	msgpack::sbuffer serialize(T&& t) {
+	inline msgpack::sbuffer serialize(T&& t) {
 		msgpack::sbuffer sb;
 		msgpack::pack(sb, std::forward<T>(t));
 		return sb;
 	}
 
 	template<typename T>
-	T deserialize(const char* buf, std::size_t len) {
+	inline T deserialize(const char* buf, std::size_t len) {
 		try {
 			auto obj_handle = msgpack::unpack(buf, len);
 			return obj_handle.get().as<T>();
@@ -76,6 +80,34 @@ namespace lite_rpc {
 		catch (...) {
 			throw std::invalid_argument("deserialize failed: Type not match");
 		}
+	}
+
+	inline auto split_tag(std::string_view tags) {
+		std::vector<size_t> tags_hash;
+		auto pos = tags.find("||");
+		while (pos != std::string_view::npos) {
+			auto tag = tags.substr(0, pos);
+			tags_hash.emplace_back(std::hash<std::string_view>()(tag));
+
+			tags = tags.substr(pos + 2);
+			pos = tags.find("||");
+		}
+		tags_hash.emplace_back(std::hash<std::string_view>()(tags));
+		return tags_hash;
+	}
+
+	inline auto split_tag_string(std::string_view tags) {
+		std::vector<std::string> tags_str;
+		auto pos = tags.find("||");
+		while (pos != std::string::npos) {
+			auto tag = tags.substr(0, pos);
+			tags_str.emplace_back(tag);
+
+			tags = tags.substr(pos + 2);
+			pos = tags.find("||");
+		}
+		tags_str.emplace_back(tags);
+		return tags_str;
 	}
 
 	struct compress_detail {

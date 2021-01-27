@@ -56,7 +56,7 @@ int main() {
 		});
 	});
 
-	c->subscribe("haha", [](example_struct&& ex) {
+	c->subscribe("haha", "aa||bb||cc||dd", [](example_struct&& ex) {
 		printf("subscribe haha res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
 

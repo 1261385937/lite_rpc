@@ -35,7 +35,7 @@ int main() {
 		ex.b = "22";
 		strcpy_s(ex.c, "33");
 		while (true) {
-			rpc_server->publish("haha", ex);
+			//rpc_server->publish("haha", ex);
 			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 		}
 	});

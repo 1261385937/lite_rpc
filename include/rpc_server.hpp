@@ -48,7 +48,7 @@ namespace lite_rpc {
 		uint64_t msg_id_;
 		boost::asio::yield_context* yield_;
 
-		std::unordered_set<std::string> subscribe_keys_;
+		std::unordered_map<size_t, std::unordered_set<size_t>> subscribe_keys_hash_;
 #ifdef LITERPC_ENABLE_ZSTD
 		ZSTD_CCtx* cctx_;
 		std::mutex cctx_mtx_;
@@ -108,8 +108,10 @@ namespace lite_rpc {
 					notify_timer_.cancel(ignored_ec);
 
 					//self remove subscribe which in rpc_server sub_conn_
-					for (const auto& key : subscribe_keys_) {
-						server_->remove_subscribe(key, this);
+					for (const auto& pair : subscribe_keys_hash_) {
+						for (const auto& tag_hash : pair.second) {
+							server_->remove_subscribe(pair.first, tag_hash, this);
+						}
 					}
 				}
 			});
@@ -172,18 +174,34 @@ namespace lite_rpc {
 			}
 
 			auto name = std::string(buf_.data(), head.name_length);
-			if (head.req_type == request_type::sub_pub) {
-				subscribe_keys_.emplace(name);
-				server_->add_subscribe(std::move(name), this);
-				return;
-			}
-
-			//req_res. head->name_length is 0
 #ifdef LITERPC_ENABLE_ZSTD
 			auto buf = decompress(compress_, { buf_.data() + head.name_length, head.body_length }, head.decompress_length);
 #else
 			auto buf = std::string_view{ buf_.data() + head.name_length, head.body_length };
 #endif
+			//sub_pub
+			if (head.req_type == request_type::sub_pub) {
+				auto topic_hash = std::hash<std::string>()(name);
+				auto tags_hash = split_tag(buf);
+				server_->add_subscribe(topic_hash, tags_hash, this);
+
+				auto iter = subscribe_keys_hash_.find(topic_hash);
+				if (iter != subscribe_keys_hash_.end()) {
+					for (const auto& tag_hash : tags_hash) {
+						iter->second.emplace(tag_hash);
+					}
+				}
+				else {
+					std::unordered_set<size_t> tas;
+					for (const auto& tag_hash : tags_hash) {
+						tas.emplace(tag_hash);
+					}
+					subscribe_keys_hash_.emplace(topic_hash, std::move(tas));
+				}
+				return;
+			}
+
+			//req_res.
 			auto iter = server_->handler_map_.find(name);
 			if (iter != server_->handler_map_.end()) {
 				iter->second(this->shared_from_this(), rc_, buf);
@@ -325,7 +343,7 @@ namespace lite_rpc {
 #endif
 			}
 			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint16_t)key.length());
+			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)key.length());
 			pa.name = std::move(key);
 
 			std::unique_lock<std::mutex> lock(mtx_);
@@ -400,7 +418,7 @@ namespace lite_rpc {
 		std::atomic<bool> run_ = true;
 
 		using conn_set = std::unordered_set<session<Resource>*>;
-		std::unordered_map<std::string, conn_set> sub_conn_;
+		std::unordered_map<size_t, std::unordered_map<size_t, conn_set>> sub_conn_;
 		std::mutex sub_conn_mtx_;
 	public:
 		rpc_server(uint16_t port, const std::vector<Resource>& rc = std::vector<Resource>{})
@@ -408,36 +426,74 @@ namespace lite_rpc {
 		{}
 
 		template<typename BodyType>
-		void publish(const std::string& key, const BodyType& body) {
+		void publish(const std::string& topic, const std::string& tag, const BodyType& body) {
 			// do not get conn_set, then publish. Or maybe get invalid sess.
 			// do this under sub_conn_mtx_
 			std::unique_lock<std::mutex> lock(sub_conn_mtx_);
-			auto iter = sub_conn_.find(key);
+			auto iter = sub_conn_.find(std::hash<std::string>()(topic));
 			if (iter == sub_conn_.end()) { //none
 				return;
 			}
+			
+			auto& tag_conn = iter->second;
+			//tag is *
+			auto tag_iter = tag_conn.find(GLOBBING_HASH);
+			if (tag_iter != tag_conn.end()) {
+				for (const auto& sess : tag_iter->second) {
+					sess->publish(topic, body);
+				}
+			}
 
-			for (const auto& sess : iter->second) {
-				sess->publish(key, body);
+			//dispatch with tag
+			tag_iter = tag_conn.find(std::hash<std::string>()(tag));
+			if (tag_iter == tag_conn.end()) {
+				return;
+			}
+			for (const auto& sess : tag_iter->second) {
+				sess->publish(topic, body);
 			}
 		}
 
-		void add_subscribe(std::string&& key, session<Resource>* sess) {
+		void add_subscribe(size_t topic_hash, const std::vector<size_t>& tags_hash, session<Resource>* sess) {
 			std::unique_lock<std::mutex> lock(sub_conn_mtx_);
-			auto iter = sub_conn_.find(key);
-			if (iter != sub_conn_.end()) {
-				iter->second.emplace(sess);
+			auto topic_iter = sub_conn_.find(topic_hash);
+			if (topic_iter == sub_conn_.end()) {
+				std::unordered_map<size_t, conn_set> tag_conn;
+				for (const auto& tag_hash : tags_hash) {
+					tag_conn.emplace(tag_hash, conn_set{ sess });
+				}
+				sub_conn_.emplace(topic_hash, std::move(tag_conn));
+				return;
 			}
-			else {
-				sub_conn_.emplace(std::move(key), conn_set{ sess });
+
+			auto& tag_conn = topic_iter->second;
+			for (const auto& tag_hash : tags_hash) {
+				auto tag_iter = tag_conn.find(tag_hash);
+				if (tag_iter != tag_conn.end()) {
+					tag_iter->second.emplace(sess);
+				}
+				else {
+					tag_conn.emplace(tag_hash, conn_set{ sess });
+				}
 			}
 		}
 
-		void remove_subscribe(const std::string& key, session<Resource>* sess) {
+		void remove_subscribe(size_t topic_hash, size_t tag_hash, session<Resource>* sess) {
 			std::unique_lock<std::mutex> lock(sub_conn_mtx_);
-			auto iter = sub_conn_.find(key);
-			if (iter != sub_conn_.end()) {
-				iter->second.erase(sess);
+			auto iter = sub_conn_.find(topic_hash);
+			if (iter == sub_conn_.end()) {
+				return;
+			}
+			
+			auto& tag_conn = iter->second;
+			auto iter1 = tag_conn.find(tag_hash);
+			if (iter1 == tag_conn.end()) {
+				return;
+			}
+
+			iter1->second.erase(sess);
+			if (iter1->second.empty()) {
+				tag_conn.erase(iter1);
 			}
 		}
 

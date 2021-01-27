@@ -50,7 +50,7 @@ namespace lite_rpc {
 		std::mutex req_cb_mtx_;
 		std::unordered_map<uint64_t, std::function<void(std::string_view)>> req_cb_map_;
 		std::mutex sub_cb_mtx_;
-		std::unordered_map<std::string, std::function<void(std::string_view)>> sub_cb_map_;
+		std::unordered_map<std::string, std::unordered_map<std::string, std::function<void(std::string_view)>>> sub_cb_map_;
 
 		disconnect_callback discon_callback_;
 
@@ -177,34 +177,40 @@ namespace lite_rpc {
 
 		//shoud call after connect ok
 		template<typename Callback>
-		void subscribe(std::string&& key, Callback&& call_back) {
+		void subscribe(std::string&& topic, std::string&& tags, Callback&& call_back) {
 			static_assert(!std::is_same_v<std::decay_t<Callback>, std::nullptr_t>, "subscribe call_back can not be nullptr");
-			std::unique_lock<std::mutex> l(sub_cb_mtx_);
-			sub_cb_map_[key] = [cb = std::move(call_back)](std::string_view data) {
-				if constexpr (function_traits<std::decay_t<Callback>>::args_size_v == 1) {
-					using res_type = typename function_traits<std::decay_t<Callback>>::nonref_tuple_args_t;
-					using first_arg_type = std::tuple_element_t<0, res_type>;
-					if constexpr (std::is_same_v<first_arg_type, std::string> || std::is_same_v<first_arg_type, std::string_view> || std::is_same_v<first_arg_type, std::vector<char>>) { //do not need serialize
-						cb({ data.data(),data.length() });
+			auto tag_s = split_tag_string(tags);
+			for (auto&& tag : tag_s) {
+				std::unique_lock<std::mutex> l(sub_cb_mtx_);
+				sub_cb_map_[topic][std::move(tag)] = [cb = std::move(call_back)](std::string_view data) {
+					if constexpr (function_traits<std::decay_t<Callback>>::args_size_v == 1) {
+						using res_type = typename function_traits<std::decay_t<Callback>>::nonref_tuple_args_t;
+						using first_arg_type = std::tuple_element_t<0, res_type>;
+						if constexpr (
+							std::is_same_v<first_arg_type, std::string> ||
+							std::is_same_v<first_arg_type, std::string_view> ||
+							std::is_same_v<first_arg_type, std::vector<char>>) { //do not need serialize
+							cb({ data.data(),data.length() });
+						}
+						else {
+							try {
+								cb(deserialize<first_arg_type>(data.data(), data.length()));
+							}
+							catch (const std::invalid_argument&) {
+								//SPDLOG_ERROR(e.what());
+							}
+						}
+					}
+					else if constexpr (function_traits<std::decay_t<Callback>>::args_size_v == 0) {
+						cb();
 					}
 					else {
-						try {
-							cb(deserialize<first_arg_type>(data.data(), data.length()));
-						}
-						catch (const std::invalid_argument&) {
-							//SPDLOG_ERROR(e.what());
-						}
+						static_assert(always_false_v<Callback>, "sub callback function arg count can only 1 or 0");
 					}
-				}
-				else if constexpr (function_traits<std::decay_t<Callback>>::args_size_v == 0) {
-					cb();
-				}
-				else {
-					static_assert(always_false_v<Callback>, "sub callback function arg count can only 1 or 0");
-				}
-			};
-			l.unlock();
-			this->write<request_type::sub_pub>(std::move(key), std::string{}, 0);
+				};
+				l.unlock();
+			}
+			this->write<request_type::sub_pub>(std::move(topic), std::move(tags), 0);
 		}
 
 		//for reconnect
@@ -212,7 +218,12 @@ namespace lite_rpc {
 			std::lock_guard<std::mutex> l(sub_cb_mtx_);
 			for (const auto& sub : sub_cb_map_) {
 				const auto& key = sub.first;
-				write<request_type::sub_pub>(key, std::string{}, 0);
+				std::string tags;
+				for (const auto& pair : sub.second) {
+					tags.append(pair.first).append("||");
+				}
+				tags = tags.substr(0, tags.length() - 2);
+				write<request_type::sub_pub>(key, std::move(tags), 0);
 			}
 			send();
 		}
@@ -278,7 +289,7 @@ namespace lite_rpc {
 			}
 
 			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint16_t)name.length());
+			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)name.length());
 			pa.name = std::move(name);
 
 			std::unique_lock<std::mutex> lock(send_queue_mtx_);
@@ -388,9 +399,9 @@ namespace lite_rpc {
 #endif
 				std::unique_lock<std::mutex> lock(sub_cb_mtx_);
 				auto iter = sub_cb_map_.find(key);
-				if (iter != sub_cb_map_.end()) {
-					iter->second(buf);
-				}
+				//if (iter != sub_cb_map_.end()) {
+				//	iter->second(buf);
+				//}
 				return;
 			}
 
