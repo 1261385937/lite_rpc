@@ -57,14 +57,41 @@ int main() {
 	});
 
 	c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
-		printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+		//printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
 	c->subscribe("haha", "ee||ff", [](example_struct&& ex) {
-		printf("subscribe haha tag<ee||ff> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+		//printf("subscribe haha tag<ee||ff> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
-	/*c->subscribe("haha", "*", [](example_struct&& ex) {
-		printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
-	});*/
+	c->subscribe("haha", "aa", [](example_struct&& ex) {
+		//printf("subscribe haha tag<aa> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
+	c->subscribe("haha", "*", [](example_struct&& ex) {
+		//printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
+
+	/*std::thread th1([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+		c->cancel_subscribe("haha", "aa");
+	});
+	th1.detach();
+
+	std::thread th2([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(20000));
+		c->cancel_subscribe("haha", "*");
+	});
+	th2.detach();
+
+	std::thread th3([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(30000));
+		c->cancel_subscribe("haha", "ee||ff");
+	});
+	th3.detach();
+
+	std::thread th4([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(40000));
+		c->cancel_subscribe("haha", "aaa||bb||cc||dd");
+	});
+	th4.detach();*/
 
 	example_struct_req struct_req{};
 	struct_req.a = 11;

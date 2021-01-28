@@ -127,10 +127,12 @@ namespace lite_rpc {
 				boost::asio::spawn(ioc_, [this, self = shared_from_this()](boost::asio::yield_context yield) {
 					try {
 						char data[sizeof(header)];
+						uint64_t count = 0;
 						for (;;) {
 							boost::asio::async_read(socket_, boost::asio::buffer(data, sizeof(header)), yield);
 							auto head = (header*)data;
 							auto length = head->name_length + head->tag_length + head->body_length;
+							printf("%d %llu\n", length, ++count);
 							if (buf_.size() < length) {
 								buf_.resize(length);
 							}
@@ -214,6 +216,24 @@ namespace lite_rpc {
 			this->write<request_type::sub_pub>(std::move(topic), std::move(tags), 0);
 		}
 
+		void cancel_subscribe(std::string&& topic, std::string&& tags) {
+			auto tag_s = split_tag_string(tags);
+			std::unique_lock<std::mutex> l(sub_cb_mtx_);
+			auto iter = sub_cb_map_.find(topic);
+			if (iter == sub_cb_map_.end()) {
+				return;
+			}
+
+			auto& tag_func = iter->second;
+			for (auto&& tag : tag_s) {
+				tag_func.erase(tag);
+			}
+			if (tag_func.empty()) {
+				sub_cb_map_.erase(iter);
+			}
+			this->write<request_type::cancel_sub_pub>(std::move(topic), std::move(tags), 0);
+		}
+
 		//for reconnect
 		void re_subscribe() {
 			std::lock_guard<std::mutex> l(sub_cb_mtx_);
@@ -226,7 +246,7 @@ namespace lite_rpc {
 				tags = tags.substr(0, tags.length() - 2);
 				write<request_type::sub_pub>(key, std::move(tags), 0);
 			}
-			send();
+			send();//at least has one keepalived msg
 		}
 
 	private:
@@ -394,7 +414,6 @@ namespace lite_rpc {
 			if (h.req_type == request_type::sub_pub) {
 				auto topic = std::string(buf_.data(), h.name_length);
 				auto tag = std::string(buf_.data() + h.name_length, h.tag_length);
-				printf("%s %s\n", topic.data(), tag.data());
 #ifdef LITERPC_ENABLE_ZSTD
 				auto buf = decompress(compress_detail_, { buf_.data() + h.name_length + h.tag_length, h.body_length }, h.decompress_length);
 #else

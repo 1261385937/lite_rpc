@@ -31,17 +31,17 @@ int main() {
 	//pubish every 3s
 	std::thread th([rpc_server]() {
 		while (true) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			example_struct ex_aa{};
 			ex_aa.a = 11;
 			ex_aa.b = "22";
-			strcpy_s(ex_aa.c, "33");
+			strcpy_s(ex_aa.c, "aa");
 			rpc_server->publish("haha", "aa", ex_aa);
 
 			example_struct ex_ee{};
 			ex_ee.a = 1111;
 			ex_ee.b = "2222";
-			strcpy_s(ex_ee.c, "3333");
+			strcpy_s(ex_ee.c, "ee");
 			rpc_server->publish("haha", "ee", ex_ee);
 			
 		}

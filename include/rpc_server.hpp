@@ -29,7 +29,8 @@ namespace lite_rpc {
 	private:
 		tcp::socket socket_;
 		boost::asio::steady_timer kick_timer_;
-		boost::asio::steady_timer notify_timer_;
+		//boost::asio::steady_timer notify_timer_;
+		//bool wait_now_ = true;
 		boost::asio::io_context& io_context_;
 		compress_detail& compress_;
 		rpc_server<Resource>* server_;
@@ -49,6 +50,7 @@ namespace lite_rpc {
 		boost::asio::yield_context* yield_;
 
 		std::unordered_map<size_t, std::unordered_set<size_t>> subscribe_keys_hash_;
+		
 #ifdef LITERPC_ENABLE_ZSTD
 		ZSTD_CCtx* cctx_;
 		std::mutex cctx_mtx_;
@@ -58,13 +60,13 @@ namespace lite_rpc {
 			: rc_(rc),
 			socket_(std::move(socket)),
 			kick_timer_(io_context),
-			notify_timer_(io_context),
+			//notify_timer_(io_context),
 			io_context_(io_context),
 			compress_(d),
 			server_(s)
 		{
 			buf_.resize(4_k);
-			notify_timer_.expires_at(std::chrono::steady_clock::time_point::max());
+			//notify_timer_.expires_at(std::chrono::steady_clock::time_point::max());
 #ifdef LITERPC_ENABLE_ZSTD
 			cctx_ = ZSTD_createCCtx();
 #endif
@@ -105,7 +107,7 @@ namespace lite_rpc {
 					close_socket();
 					boost::system::error_code ignored_ec;
 					kick_timer_.cancel(ignored_ec);
-					notify_timer_.cancel(ignored_ec);
+					//notify_timer_.cancel(ignored_ec);
 
 					//self remove subscribe which in rpc_server sub_conn_
 					for (const auto& pair : subscribe_keys_hash_) {
@@ -128,20 +130,22 @@ namespace lite_rpc {
 				//SPDLOG_INFO("timer quit, session address:{}", (uint64_t)this);
 			});
 
-			boost::asio::spawn(io_context_, [this, self](boost::asio::yield_context yield) {
+			/*boost::asio::spawn(io_context_, [this, self](boost::asio::yield_context yield) {
 				boost::system::error_code ignored_ec;
 				while (socket_.is_open()) {
 					std::unique_lock<std::mutex> l(mtx_);
 					if (send_queue_.empty()) {
 						l.unlock();
+						wait_now_ = true;
 						notify_timer_.async_wait(yield[ignored_ec]);
 					}
 					else {
 						l.unlock();
 						coro_send(yield, ignored_ec);
+						wait_now_ = false;
 					}
 				}
-			});
+			});*/
 		}
 
 		template<typename String_top, typename String_tag, typename BodyType>
@@ -197,6 +201,28 @@ namespace lite_rpc {
 						tas.emplace(tag_hash);
 					}
 					subscribe_keys_hash_.emplace(topic_hash, std::move(tas));
+				}
+				return;
+			}
+
+			//cancel_sub_pub
+			if (head.req_type == request_type::cancel_sub_pub) {
+				auto topic_hash = std::hash<std::string>()(name);
+				auto tags_hash = split_tag_hash(buf);
+				for (const auto& tag_hash : tags_hash) {
+					server_->remove_subscribe(topic_hash, tag_hash, this);
+				}
+
+				auto iter_topic = subscribe_keys_hash_.find(topic_hash);
+				if (iter_topic == subscribe_keys_hash_.end()) {
+					return;
+				}
+
+				for (const auto& tag_hash : tags_hash) {
+					iter_topic->second.erase(tag_hash);
+				}
+				if (iter_topic->second.empty()) {
+					subscribe_keys_hash_.erase(iter_topic);				
 				}
 				return;
 			}
@@ -352,8 +378,8 @@ namespace lite_rpc {
 				return; //once write is begining, it will send all send_queue_ data  step by step.
 			}
 			lock.unlock();
-			//send();
-			notify_timer_.cancel_one();
+			send();
+			//notify_timer_.cancel_one();
 		}
 
 		template<typename BodyType>
@@ -492,9 +518,11 @@ namespace lite_rpc {
 			}
 
 			iter1->second.erase(sess);
-			if (iter1->second.empty()) {
-				tag_conn.erase(iter1);
+			if (!iter1->second.empty()) {
+				return;
 			}
+
+			tag_conn.erase(iter1);
 			if (tag_conn.empty()) {
 				sub_conn_.erase(iter);
 			}

@@ -36,6 +36,7 @@ namespace lite_rpc {
 	enum class request_type : uint8_t {
 		req_res,
 		sub_pub,
+		cancel_sub_pub,
 		keepalived
 	};
 
