@@ -164,6 +164,20 @@ namespace lite_rpc {
 		return { detail.buf.data() ,length };
 	}
 
+	template<typename SrcType>
+	inline size_t compress(compress_detail& detail, SrcType&& src, std::string& dst)
+	{
+		size_t src_size = src.size();
+		if (src_size < COMPRESS_THRESHOLD) {
+			return src_size;
+		}
+
+		//need compress
+		dst.resize(src_size);
+		auto compress_length = ZSTD_compressCCtx(detail.cctx, dst.data(), dst.length(), src.data(), src_size, 10);
+		return compress_length;
+	}
+
 	inline std::string_view decompress(compress_detail& detail, std::string_view src, size_t decompress_length)
 	{
 		auto src_size = src.length();

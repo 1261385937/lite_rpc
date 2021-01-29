@@ -42,6 +42,7 @@ namespace lite_rpc {
 			std::string inner_buf;
 			uint32_t buf_size;
 			char* ext_buf;
+			bool need_free = true;
 		};
 		std::deque<packet> send_queue_;
 		std::mutex mtx_;
@@ -50,11 +51,7 @@ namespace lite_rpc {
 		boost::asio::yield_context* yield_;
 
 		std::unordered_map<size_t, std::unordered_set<size_t>> subscribe_keys_hash_;
-		
-#ifdef LITERPC_ENABLE_ZSTD
-		ZSTD_CCtx* cctx_;
-		std::mutex cctx_mtx_;
-#endif
+
 	public:
 		explicit session(boost::asio::io_context& io_context, tcp::socket socket, const Resource& rc, compress_detail& d, rpc_server<Resource>* s)
 			: rc_(rc),
@@ -67,17 +64,6 @@ namespace lite_rpc {
 		{
 			buf_.resize(4_k);
 			//notify_timer_.expires_at(std::chrono::steady_clock::time_point::max());
-#ifdef LITERPC_ENABLE_ZSTD
-			cctx_ = ZSTD_createCCtx();
-#endif
-		}
-
-		~session() {
-#ifdef LITERPC_ENABLE_ZSTD
-			if (cctx_) {
-				ZSTD_freeCCtx(cctx_);
-			}
-#endif
 		}
 
 		void go() {
@@ -148,8 +134,17 @@ namespace lite_rpc {
 			});*/
 		}
 
+
+		void publish(packet&& p) {
+			this->publish_write(std::move(p));
+		}
+
+		void publish(const packet& p) {
+			this->publish_write(p);
+		}
+
 		template<typename String_top, typename String_tag, typename BodyType>
-		void publish(String_top&& topic, String_tag&& tag, BodyType&& body) {
+		void publish0(String_top&& topic, String_tag&& tag, BodyType&& body) {
 			this->write<request_type::sub_pub>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), 0);
 		}
 
@@ -169,6 +164,70 @@ namespace lite_rpc {
 
 		auto get_msg_id() {
 			return msg_id_;
+		}
+
+		template<request_type ReqType, typename String_top, typename String_tag, typename BodyType>
+		static auto make_packet(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) {
+			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
+			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
+			size_t decompress_length = 0;
+			size_t body_length = 0;
+			packet pa{};
+
+			/*static */thread_local compress_detail deatil{};
+			if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::vector<char>> || std::is_same_v<T, std::string_view>) { //do not need serialize
+				decompress_length = body.size();
+#ifdef LITERPC_ENABLE_ZSTD
+				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress(deatil, body, pa.inner_buf);
+				}
+				else {
+#endif
+					body_length = decompress_length; //do not need compress, the length is same.
+					using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
+					if constexpr (std::is_same_v<T, std::string>) {
+						pa.inner_buf = std::move(body);
+					}
+					else {
+						pa.inner_buf = std::string(body.data(), body.size());
+					}
+#ifdef LITERPC_ENABLE_ZSTD
+				}
+#endif
+			}
+			else if constexpr (lite_rpc::is_char_array_v<T>) {
+				decompress_length = sizeof(body) - 1;
+#ifdef LITERPC_ENABLE_ZSTD
+				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress(deatil, std::string_view{ body, decompress_length }, pa.inner_buf);
+				}
+				else {
+#endif
+					pa.inner_buf = body;
+					body_length = pa.inner_buf.length();
+#ifdef LITERPC_ENABLE_ZSTD
+				}
+#endif
+			}
+			else { //need serialize
+				auto seri = serialize(std::forward<BodyType>(body));
+				decompress_length = seri.size();
+#ifdef LITERPC_ENABLE_ZSTD
+				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress(deatil, seri, pa.inner_buf);
+				}
+				else {
+#endif
+					body_length = decompress_length; //do not need compress, the length is same.
+					pa.ext_buf = seri.release();
+#ifdef LITERPC_ENABLE_ZSTD
+				}
+#endif
+			}
+			pa.buf_size = (uint32_t)body_length;
+			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)topic.length(), (uint16_t)tag.length());
+			pa.name = std::forward<String_top>(topic) + std::forward<String_tag>(tag);
+			return pa;
 		}
 
 	private:
@@ -222,7 +281,7 @@ namespace lite_rpc {
 					iter_topic->second.erase(tag_hash);
 				}
 				if (iter_topic->second.empty()) {
-					subscribe_keys_hash_.erase(iter_topic);				
+					subscribe_keys_hash_.erase(iter_topic);
 				}
 				return;
 			}
@@ -269,8 +328,9 @@ namespace lite_rpc {
 				}
 
 				std::unique_lock<std::mutex> lock(mtx_);
-				if (send_queue_.front().ext_buf != nullptr) { //need free extra buf
-					::free(send_queue_.front().ext_buf);
+				auto& pack = send_queue_.front();
+				if (pack.ext_buf != nullptr && pack.need_free) { //need free extra buf
+					::free(pack.ext_buf);
 				}
 				send_queue_.pop_front();
 				if (!send_queue_.empty()) {
@@ -305,73 +365,16 @@ namespace lite_rpc {
 			}
 
 			std::unique_lock<std::mutex> lock(mtx_);
-			if (send_queue_.front().ext_buf != nullptr) { //need free extra buf
-				::free(send_queue_.front().ext_buf);
+			auto& pack = send_queue_.front();
+			if (pack.ext_buf != nullptr && pack.need_free) { //need free extra buf
+				::free(pack.ext_buf);
 			}
 			send_queue_.pop_front();
 		}
 
 		template<request_type ReqType, typename String_top, typename String_tag, typename BodyType>
 		void write(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
-			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
-			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
-			size_t decompress_length = 0;
-			size_t body_length = 0;
-			packet pa{};
-
-			if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::vector<char>> || std::is_same_v<T, std::string_view>) { //do not need serialize
-				decompress_length = body.size();
-#ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(cctx_, cctx_mtx_, body, pa.inner_buf);
-				}
-				else {
-#endif
-					body_length = decompress_length; //do not need compress, the length is same.
-					using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
-					if constexpr (std::is_same_v<T, std::string>) {
-						pa.inner_buf = std::move(body);
-					}
-					else {
-						pa.inner_buf = std::string(body.data(), body.size());
-					}
-#ifdef LITERPC_ENABLE_ZSTD
-				}
-#endif
-			}
-			else if constexpr (lite_rpc::is_char_array_v<T>) {
-				decompress_length = sizeof(body) - 1;
-#ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(cctx_, cctx_mtx_, std::string_view{ body,decompress_length }, pa.inner_buf);
-				}
-				else {
-#endif
-					pa.inner_buf = body;
-					body_length = pa.inner_buf.length();
-#ifdef LITERPC_ENABLE_ZSTD
-				}
-#endif
-			}
-			else { //need serialize
-				auto seri = serialize(std::forward<BodyType>(body));
-				decompress_length = seri.size();
-#ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(cctx_, cctx_mtx_, seri, pa.inner_buf);
-				}
-				else {
-#endif
-					body_length = decompress_length; //do not need compress, the length is same.
-					pa.ext_buf = seri.release();
-#ifdef LITERPC_ENABLE_ZSTD
-				}
-#endif
-			}
-			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)topic.length(), (uint16_t)tag.length());
-			pa.name = std::forward<String_top>(topic) + std::forward<String_tag>(tag);
-
+			auto pa = make_packet<ReqType>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), msg_id);
 			std::unique_lock<std::mutex> lock(mtx_);
 			send_queue_.emplace_back(std::move(pa));
 			if (send_queue_.size() > 1) {
@@ -380,6 +383,18 @@ namespace lite_rpc {
 			lock.unlock();
 			send();
 			//notify_timer_.cancel_one();
+		}
+
+		//avoid serialize and compress many times
+		template<typename Packet>
+		void publish_write(Packet&& pa) {
+			std::unique_lock<std::mutex> lock(mtx_);
+			send_queue_.emplace_back(std::forward<Packet>(pa));
+			if (send_queue_.size() > 1) {
+				return; //once write is begining, it will send all send_queue_ data  step by step.
+			}
+			lock.unlock();
+			send();
 		}
 
 		template<typename BodyType>
@@ -451,32 +466,82 @@ namespace lite_rpc {
 			:port_(port), session_rc_(rc)
 		{}
 
+		//optimize serialize and compress
 		template<typename BodyType>
-		void publish(const std::string& topic, const std::string& tag, const BodyType& body) {
+		void publish(std::string topic, std::string tag, BodyType&& body) {
 			// do not get conn_set, then publish. Or maybe get invalid sess.
 			// do this under sub_conn_mtx_
 			std::unique_lock<std::mutex> lock(sub_conn_mtx_);
-			auto iter = sub_conn_.find(std::hash<std::string>()(topic));
-			if (iter == sub_conn_.end()) { //none
+			auto iter0 = sub_conn_.find(std::hash<std::string>()(topic));
+			if (iter0 == sub_conn_.end()) { //none
 				return;
 			}
 
-			auto& tag_conn = iter->second;
+			int globbing_conns = 0;
+			int tag_conns = 0;
+			auto& tag_conn = iter0->second;
 			//tag is *
-			auto tag_iter = tag_conn.find(GLOBBING_HASH);
+			auto globbing_iter = tag_conn.find(GLOBBING_HASH);
+			if (globbing_iter != tag_conn.end()) {
+				globbing_conns = (int)globbing_iter->second.size();
+			}
+			//dispatch with tag
+			auto tag_iter = tag_conn.find(std::hash<std::string>()(tag));
 			if (tag_iter != tag_conn.end()) {
-				for (const auto& sess : tag_iter->second) {
-					sess->publish(topic, std::string("*"), body);
+				tag_conns = (int)tag_iter->second.size();
+			}
+
+			if (globbing_conns > 0) {
+				auto pa = session<Resource>::make_packet<request_type::sub_pub>(topic, std::string("*"), std::forward<BodyType>(body), 0);
+				pa.need_free = false;
+				auto iter = globbing_iter->second.begin();
+				for (int i = 0; i < globbing_conns - 1; i++) {
+					(*iter)->publish(pa);
+					++iter;
+				}
+				//deal the last conn
+				pa.need_free = true;
+				(*iter)->publish(std::move(pa));
+			}
+
+			if (tag_conns > 0) {
+				auto pa = session<Resource>::make_packet<request_type::sub_pub>(std::move(topic), std::move(tag), std::forward<BodyType>(body), 0);
+				pa.need_free = false;
+				auto iter = tag_iter->second.begin();
+				for (int i = 0; i < tag_conns - 1; i++) {
+					(*iter)->publish(pa);
+					++iter;
+				}
+				//deal the last conn
+				pa.need_free = true;
+				(*iter)->publish(std::move(pa));
+			}
+		}
+
+		template<typename BodyType>
+		void publish0(std::string topic, std::string tag, BodyType&& body) {
+			// do not get conn_set, then publish. Or maybe get invalid sess.
+			// do this under sub_conn_mtx_
+			std::unique_lock<std::mutex> lock(sub_conn_mtx_);
+			auto iter0 = sub_conn_.find(std::hash<std::string>()(topic));
+			if (iter0 == sub_conn_.end()) { //none
+				return;
+			}
+
+			auto& tag_conn = iter0->second;
+			//tag is *
+			auto globbing_iter = tag_conn.find(GLOBBING_HASH);
+			if (globbing_iter != tag_conn.end()) {
+				for (const auto& sess : globbing_iter->second) {
+					sess->publish0(topic, std::string("*"), body);
 				}
 			}
-
 			//dispatch with tag
-			tag_iter = tag_conn.find(std::hash<std::string>()(tag));
-			if (tag_iter == tag_conn.end()) {
-				return;
-			}
-			for (const auto& sess : tag_iter->second) {
-				sess->publish(topic, tag, body);
+			auto tag_iter = tag_conn.find(std::hash<std::string>()(tag));
+			if (tag_iter != tag_conn.end()) {
+				for (const auto& sess : tag_iter->second) {
+					sess->publish0(topic, tag, body);
+				}
 			}
 		}
 

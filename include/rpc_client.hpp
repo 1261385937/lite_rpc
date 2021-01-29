@@ -127,12 +127,10 @@ namespace lite_rpc {
 				boost::asio::spawn(ioc_, [this, self = shared_from_this()](boost::asio::yield_context yield) {
 					try {
 						char data[sizeof(header)];
-						uint64_t count = 0;
 						for (;;) {
 							boost::asio::async_read(socket_, boost::asio::buffer(data, sizeof(header)), yield);
 							auto head = (header*)data;
 							auto length = head->name_length + head->tag_length + head->body_length;
-							printf("%d %llu\n", length, ++count);
 							if (buf_.size() < length) {
 								buf_.resize(length);
 							}
