@@ -10,7 +10,18 @@ void printf_req(example_tuple_req&& req) {
 class server {
 public:
 	auto get_server_msg() {
-		return get_server_msg_res{ "this is server" };
+		return get_server_msg_res{ R"(
+{"adsorbMinPriceValid":1,"adsorbPixel":15,"adsorbValid":1,"againstOpening":0,"bothEnds":0,
+"breakthroughOpening":1,"breakthroughRegressionOpening":0,"constantSpeedMove":0,"grabPixel":8,"hGridMinPriceMultiple":1,
+"immediateOpening":0,"klineTodayShow":0,"klineTodayShowType":0,"leftright":1,"longScale":0,"opencloseshow":0,"openingClosing":0,
+"overPriceClosing":0,"pressureSupportScope":0,"realbottom":20,"realtime":60,"realtop":20,"regressionOpening":0,"rulerAlpha":36,
+"rulerLongLineLen":90,"rulerReverse":0,"rulerShortLineLen":20,"rulerSingleDoubleScale":0,"rulerStepCnt":15,"rulerStepMinPixel":0,
+"rulerTextValid":0,"rulerTitleValid":0,"rulerValid":1,"shapeJumpTimeout":0.3,"shapeJumpTimeout2":0.2,"smart":0,"stockbottom":300,
+"stockright":200,"stocktime":60,"stocktop":300,"tradebubble":0,"triggerClosing":0,"triggerOpening":0,"twinkleShow":1,"twinkleValueDn":2,
+"twinkleValueUp":2"rulerLongLineLen":90,"rulerReverse":0,"rulerShortLineLen":20,"rulerSingleDoubleScale":0,"rulerStepCnt":15,"rulerStepMinPixel":0,
+"rulerTextValid":0,"rulerTitleValid":0,"rulerValid":1,"shapeJumpTimeout":0.3,"shapeJumpTimeout2":0.2,"smart":0,"stockbottom":300,
+"stockright":200,"stocktime":60,"stocktop":300,"tradebubble":0,"triggerClosing":0,"triggerOpening":0,"twinkleShow":1,"twinkleValueDn":2,
+"twinkleValueUp":2)" };
 	}
 };
 
@@ -31,7 +42,7 @@ int main() {
 	//pubish every 3s
 	std::thread th([rpc_server]() {
 		while (true) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 			example_struct ex_aa{};
 			ex_aa.a = 11;
 			ex_aa.b = "22";
