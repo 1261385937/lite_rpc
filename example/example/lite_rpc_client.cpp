@@ -69,29 +69,54 @@ int main() {
 		printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
 
-	/*std::thread th1([c]() {
-		std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-		c->cancel_subscribe("haha", "aa");
+	std::thread th1([c]() {
+		while (1) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 10000));
+			c->cancel_subscribe("haha", "aa");
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 10000));
+			c->subscribe("haha", "aa", [](example_struct&& ex) {
+				printf("subscribe haha tag<aa> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+			});
+		}
+		
 	});
 	th1.detach();
 
 	std::thread th2([c]() {
-		std::this_thread::sleep_for(std::chrono::milliseconds(20000));
-		c->cancel_subscribe("haha", "*");
+		while (1) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 20000));
+			c->cancel_subscribe("haha", "*");
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 20000));
+			c->subscribe("haha", "*", [](example_struct&& ex) {
+				printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+			});
+		}		
 	});
 	th2.detach();
 
 	std::thread th3([c]() {
-		std::this_thread::sleep_for(std::chrono::milliseconds(30000));
-		c->cancel_subscribe("haha", "ee||ff");
+		while (1) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 30000));
+			c->cancel_subscribe("haha", "ee||ff");
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 30000));
+			c->subscribe("haha", "ee||ff", [](example_struct&& ex) {
+				printf("subscribe haha tag<ee||ff> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+			});
+		}
 	});
 	th3.detach();
 
 	std::thread th4([c]() {
-		std::this_thread::sleep_for(std::chrono::milliseconds(40000));
-		c->cancel_subscribe("haha", "aaa||bb||cc||dd");
+		while (1) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 40000));
+			c->cancel_subscribe("haha", "aaa||bb||cc||dd");
+			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 40000));
+			c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
+				printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+			});
+		}
 	});
-	th4.detach();*/
+	th4.detach();
 
 	example_struct_req struct_req{};
 	struct_req.a = 11;

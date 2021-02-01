@@ -42,7 +42,7 @@ int main() {
 	//pubish every 3s
 	std::thread th([rpc_server]() {
 		while (true) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			example_struct ex_aa{};
 			ex_aa.a = 11;
 			ex_aa.b = "22";
