@@ -492,7 +492,7 @@ namespace lite_rpc {
 			}
 
 			if (globbing_conns > 0) {
-				auto pa = session<Resource>::make_packet<request_type::sub_pub>(topic, std::string("*"), std::forward<BodyType>(body), 0);
+				auto pa = session<Resource>::template make_packet<request_type::sub_pub>(topic, std::string("*"), std::forward<BodyType>(body), 0);
 				pa.need_free = false;
 				auto iter = globbing_iter->second.begin();
 				for (int i = 0; i < globbing_conns - 1; i++) {
@@ -505,7 +505,7 @@ namespace lite_rpc {
 			}
 
 			if (tag_conns > 0) {
-				auto pa = session<Resource>::make_packet<request_type::sub_pub>(std::move(topic), std::move(tag), std::forward<BodyType>(body), 0);
+				auto pa = session<Resource>::template make_packet<request_type::sub_pub>(std::move(topic), std::move(tag), std::forward<BodyType>(body), 0);
 				pa.need_free = false;
 				auto iter = tag_iter->second.begin();
 				for (int i = 0; i < tag_conns - 1; i++) {
