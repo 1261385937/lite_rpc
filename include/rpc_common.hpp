@@ -193,6 +193,30 @@ namespace lite_rpc {
 		assert(origin_body_length == decompress_length);
 		return{ detail.buf.data() ,origin_body_length };
 	}
+
+	inline std::string_view decompress(compress_detail& detail, std::string_view src) {
+		if (src.length() <= 4) { //can not be compressed
+			return src;
+		}
+
+		uint32_t magic_num = *((uint32_t*)src.data());
+		if (magic_num != ZSTD_MAGICNUMBER) { //can not be compressed	 			
+			return src;
+		}
+		//extremely compressed data, maybe not
+		auto decompress_length = ZSTD_getDecompressedSize(src.data(), src.length());
+		if (decompress_length == 0) {//get decompress_length error, maybe not compressed data
+			return src;
+		}
+
+		//need decompress
+		if (decompress_length > detail.buf.size()) {
+			detail.buf.resize((size_t)decompress_length);
+		}
+		auto origin_body_length = ZSTD_decompressDCtx(detail.dctx, detail.buf.data(), detail.buf.size(), src.data(), src.length());
+		assert(origin_body_length == decompress_length);
+		return{ detail.buf.data() ,origin_body_length };
+	}
 #endif
 }
 
