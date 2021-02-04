@@ -2,6 +2,7 @@
 
 #define LITERPC_ENABLE_ZSTD
 
+#include <typeinfo>
 #include <string>
 #include "msgpack.hpp"
 
@@ -79,7 +80,7 @@ namespace lite_rpc {
 			return obj_handle.get().as<T>();
 		}
 		catch (...) {
-			throw std::invalid_argument("deserialize failed: Type not match");
+			throw std::invalid_argument(std::string("deserialize failed: Type not match, type is ") + typeid(T{}).name());
 		}
 	}
 
