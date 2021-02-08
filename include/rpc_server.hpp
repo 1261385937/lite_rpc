@@ -47,8 +47,8 @@ namespace lite_rpc {
 		std::deque<packet> send_queue_;
 		std::mutex mtx_;
 
-		uint64_t msg_id_;
-		boost::asio::yield_context* yield_;
+		uint64_t msg_id_{};
+		boost::asio::yield_context* yield_{};
 
 		std::unordered_map<size_t, std::unordered_set<size_t>> subscribe_keys_hash_;
 
