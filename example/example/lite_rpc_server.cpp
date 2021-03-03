@@ -2,6 +2,11 @@
 #include "rpc_server.hpp"
 #include "rpc_define.h"
 
+struct common_resource {
+	std::string connection_pool = "connection_pool";
+	std::string thread_pool = "thread_pool";
+};
+
 void printf_req(example_tuple_req&& req) {
 	auto&& [a, b, c] = std::move(req);
 	printf("req is:%d %s %s\n", a, b.c_str(), c.c_str());
@@ -25,12 +30,6 @@ public:
 	}
 };
 
-
-struct common_resource {
-	std::string connection_pool = "connection_pool";
-	std::string thread_pool = "thread_pool";
-};
-
 int main() {
 	auto parallel_num = std::thread::hardware_concurrency();
 	//auto rpc_server = std::make_shared<lite_rpc::rpc_server<lite_rpc::empty_resource>>((uint16_t)31236);
@@ -42,22 +41,44 @@ int main() {
 	//pubish every 3s
 	std::thread th([rpc_server]() {
 		while (true) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			example_struct ex_aa{};
 			ex_aa.a = 11;
 			ex_aa.b = "22";
 			strcpy_s(ex_aa.c, "aa");
-			rpc_server->publish("haha", "aa", ex_aa);
+			rpc_server->publish("haha", "aa", ex_aa, true);
 
 			example_struct ex_ee{};
 			ex_ee.a = 1111;
 			ex_ee.b = "2222";
 			strcpy_s(ex_ee.c, "ee");
-			rpc_server->publish("haha", "ee", ex_ee);
-			
+			rpc_server->publish("haha", "ee", ex_ee, true);
+
+			rpc_server->publish("xixi", "", std::string("xixixixixi"), true);			
 		}
 	});
 	th.detach();
+
+	rpc_server->register_method("login", [](std::weak_ptr<lite_rpc::session<common_resource>> sess, std::tuple<std::string, std::string>&& req) {
+		auto conn = sess.lock();
+		auto&& [name, pwd] = req;
+		if (name == "11" && pwd == "22") {
+			conn->add_session_cache("is_login", "1");
+			conn->enable_publish();
+		}
+	});
+
+	rpc_server->register_method("disable_publish", [](std::weak_ptr<lite_rpc::session<common_resource>> sess) {
+		auto conn = sess.lock();
+		auto& cache = conn->get_session_cache();
+		if (auto iter = cache.find("is_login"); iter != cache.end()) {
+			conn->disable_publish();
+		}
+		else {
+			conn->close_socket();
+		}
+	});
+
 
 	rpc_server->register_method("example_struct", [](example_struct_req&& req) {
 		return example_struct_res{ std::to_string(req.a) + "+" + req.b + "+" + req.c };
@@ -112,6 +133,12 @@ int main() {
 	rpc_server->register_method("sess_rc_req", [](std::weak_ptr<lite_rpc::session<common_resource>> sess, const common_resource& rc, sess_rc_req_req&& req) {
 		auto conn = sess.lock();
 		conn->respond(sess_rc_req_res{ "this is test sess_rc_req " } + rc.connection_pool + " " + rc.thread_pool + " " + std::to_string(req), conn->get_msg_id());
+	});
+
+	//simulate not login, then close conn
+	rpc_server->register_method("invalid_call", [](std::weak_ptr<lite_rpc::session<common_resource>> sess) {
+		auto conn = sess.lock();
+		conn->close_socket();
 	});
 
 	rpc_server->run(parallel_num);

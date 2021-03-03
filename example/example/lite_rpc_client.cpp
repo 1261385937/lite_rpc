@@ -34,7 +34,6 @@
 //
 //}
 
-
 #include <future>
 #include "rpc_client.hpp"
 #include "rpc_define.h"
@@ -52,8 +51,18 @@ int main() {
 		printf("conn lost, reconn\n");
 
 		c->connect_async("127.0.0.1", "31236", 5, [c]() {
+			printf("connect ok\n");
 			c->re_subscribe();
+			c->remote_call_async("login", std::tuple<std::string, std::string>("11", "22"), nullptr);
 		});
+	});
+
+	c->subscribe("xixi", "", [](std::string&& res) {
+		printf("subscribe xixi tag<> res:%s\n", res.data());
+	});
+
+	c->subscribe("xixi", "*", [](std::string&& res) {
+		printf("subscribe xixi tag<*> res:%s\n", res.data());
 	});
 
 	c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
@@ -75,10 +84,9 @@ int main() {
 			c->cancel_subscribe("haha", "aa");
 			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 10000));
 			c->subscribe("haha", "aa", [](example_struct&& ex) {
-				printf("subscribe haha tag<aa> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+				printf("subscribe haha tag<aa> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 			});
 		}
-		
 	});
 	th1.detach();
 
@@ -88,7 +96,7 @@ int main() {
 			c->cancel_subscribe("haha", "*");
 			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 20000));
 			c->subscribe("haha", "*", [](example_struct&& ex) {
-				printf("subscribe haha tag<*> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+				printf("subscribe haha tag<*> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 			});
 		}		
 	});
@@ -112,11 +120,32 @@ int main() {
 			c->cancel_subscribe("haha", "aaa||bb||cc||dd");
 			std::this_thread::sleep_for(std::chrono::milliseconds(std::rand() % 40000));
 			c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
-				printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+				printf("subscribe haha tag<aa||bb||cc||dd> res:%s\n\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 			});
 		}
 	});
 	th4.detach();
+
+	//use for verifying, enable publish in server side
+	std::thread th_login([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(20000));
+		c->remote_call_async("login", std::tuple<std::string, std::string>("11", "22"), nullptr);
+	});
+	th_login.detach();
+	
+	//disable publish in server side
+	std::thread th_disable_publish([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(40000));
+		c->remote_call_async("disable_publish", "", nullptr);
+	});
+	th_disable_publish.detach();
+
+	//simulate a invalid call
+	std::thread th_invalid_publish([c]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(60000));
+		c->remote_call_async("invalid_call", "", nullptr);
+	});
+	th_invalid_publish.detach();
 
 	example_struct_req struct_req{};
 	struct_req.a = 11;
@@ -135,6 +164,7 @@ int main() {
 	c->remote_call_async("printf", example_tuple_req{ 11,"22","33" }, nullptr);
 
 	//call class member func, no req to server
+	//server will close the connection, because of not login
 	c->remote_call_async("get_server_msg", "", [](get_server_msg_res&& res) {
 		printf("get_server_msg res: %s\n", res.c_str());
 	});
@@ -143,7 +173,6 @@ int main() {
 	c->remote_call_async("async_response", async_response_req{ 1 }, [](async_response_res&& res) {
 		printf("async_response res: %d\n", res);
 	});
-
 
 	//sync call is so easy with std::promise
 	std::promise<client_sync_call_res> f_res;

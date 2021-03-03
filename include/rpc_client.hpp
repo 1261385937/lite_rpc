@@ -61,6 +61,7 @@ namespace lite_rpc {
 		int timeout_s_ = 5;
 
 		compress_detail compress_detail_;
+		std::atomic<bool> auto_reconnect_ = false;
 
 	public:
 		rpc_client() {
@@ -170,6 +171,14 @@ namespace lite_rpc {
 			discon_callback_ = std::move(discon_cb);
 		}
 
+		void enable_auto_reconnect() {
+			auto_reconnect_ = true;
+		}
+
+		void disable_auto_reconnect() {
+			auto_reconnect_ = false;
+		}
+
 		template<typename ReqType, typename Callback>
 		void remote_call_async(std::string&& method_name, ReqType&& req_content, Callback&& call_back) {
 			this->write(std::move(method_name), std::forward<ReqType>(req_content), this->bind_cb(std::forward<Callback>(call_back)));
@@ -244,7 +253,7 @@ namespace lite_rpc {
 				tags = tags.substr(0, tags.length() - 2);
 				write<request_type::sub_pub>(key, std::move(tags), 0);
 			}
-			send();//at least has one keepalived msg
+			send();//at least has one msg in send_queue_
 		}
 
 	private:
@@ -376,10 +385,15 @@ namespace lite_rpc {
 					//SPDLOG_ERROR("write to server error: {}, close the connection. Then reconnect", ec.message());
 					close_socket();
 					conn_alived_ = false;
-					//here send_queue_ size must be >=1, so after re_subscribe, need to send initiatively
+					//here send_queue_ size must be >=1, because of async_write failed, send_queue_ do not pop_front yet.
+					//so need to send initiatively
+					if (!auto_reconnect_.load()) {
+						discon_callback_();
+						return;
+					}
+
 					connect_async(ip_, port_, timeout_s_, [this]() {
 						re_subscribe();
-						//this->send();
 					});
 					return;
 				}
