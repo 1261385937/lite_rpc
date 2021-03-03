@@ -1,7 +1,7 @@
 # lite_rpc
 A lite rpc library with no IDL, no cross-language. Supports:
 </br>req-res mode
-</br>sub-pub mode
+</br>sub-pub mode with tag and topic
 </br>automatically compress (zstd)
 </br> 
 ## Note
@@ -113,8 +113,18 @@ int main() {
 	});
 	f.get_future().get();
 
+	//topic is haha, tag is z
+	c->subscribe("haha", "z", [](example_struct&& ex) {
+		printf("subscribe:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
 
-	c->subscribe("haha", [](example_struct&& ex) {
+	//match all tags about topic haha
+	c->subscribe("haha", "*", [](example_struct&& ex) {
+		printf("subscribe:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
+	});
+
+	//match tag aaa, bb, cc, dd about topic haha
+	c->subscribe("haha", "aaa||bb||cc||dd", [](example_struct&& ex) {
 		printf("subscribe:%s\n", (std::to_string(ex.a) + "+" + ex.b + "+" + ex.c).c_str());
 	});
 
@@ -137,7 +147,8 @@ int main() {
 		ex.b = "22";
 		strcpy_s(ex.c, "33");
 		while (true) {
-			rpc_server->publish("haha", ex);
+			rpc_server->publish("haha", "z" ex);
+			rpc_server->publish("haha", "zz" ex);
 			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 		}
 	});
