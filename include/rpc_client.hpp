@@ -388,7 +388,9 @@ namespace lite_rpc {
 					//here send_queue_ size must be >=1, because of async_write failed, send_queue_ do not pop_front yet.
 					//so need to send initiatively
 					if (!auto_reconnect_.load()) {
-						discon_callback_();
+						if (discon_callback_) {
+							discon_callback_();
+						}
 						return;
 					}
 
