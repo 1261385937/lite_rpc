@@ -7,7 +7,7 @@ A lite rpc library with no IDL, no cross-language. Supports:
 ## Note
 It is written by c++17.
 </br>Strongly limit the rpc func param number for avoiding mistake. If you want more func param number, please use std::tuple or struct package them.
-</br>rpc_server(typename Resource) is used for avoiding competition. If you make a special connection_pool for every parallel, you will not get competition, and the special connection_pool just need one item. Usually the parallel number equal to hardware_concurrency.
+</br>rpc_server(typename Resource) is used for avoiding competition. If you make a special resource_pool for every parallel, you will not get competition, and the special pool just need one item. Usually the parallel number equal to hardware_concurrency.
 	
 ## Dependence
 Boost.asio. Because of asio coroutine (prepare for c++20 coroutine).
