@@ -44,7 +44,7 @@ namespace lite_rpc {
 				}
 
 				auto conn_count = tag_iter->second.size();
-				auto pa = session<Resource>::template make_packet<request_type::sub_pub>(std::forward<decltype(args)>(args)...);
+				auto pa = session<Resource>::template make_packet<msg_type::sub_pub>(std::forward<decltype(args)>(args)...);
 				pa.need_free = false;
 				auto iter = tag_iter->second.begin();
 

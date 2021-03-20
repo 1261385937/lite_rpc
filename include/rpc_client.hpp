@@ -46,7 +46,7 @@ namespace lite_rpc {
 		std::string ip_;
 		std::string port_;
 
-		uint64_t message_id_;
+		uint64_t message_id_ = 1;
 		std::mutex req_cb_mtx_;
 		std::unordered_map<uint64_t, std::function<void(std::string_view)>> req_cb_map_;
 		std::mutex sub_cb_mtx_;
@@ -205,7 +205,7 @@ namespace lite_rpc {
 							try {
 								cb(deserialize<first_arg_type>(data.data(), data.length()));
 							}
-							catch (const std::invalid_argument&e) {
+							catch (const std::invalid_argument& e) {
 								printf("deserialize %s\n", e.what());
 								//SPDLOG_ERROR(e.what());
 							}
@@ -220,7 +220,7 @@ namespace lite_rpc {
 				};
 				l.unlock();
 			}
-			this->write<request_type::sub_pub>(std::move(topic), std::move(tags), 0);
+			this->write<msg_type::sub_pub>(std::move(topic), std::move(tags), 0);
 		}
 
 		void cancel_subscribe(std::string&& topic, std::string&& tags) {
@@ -238,7 +238,7 @@ namespace lite_rpc {
 			if (tag_func.empty()) {
 				sub_cb_map_.erase(iter);
 			}
-			this->write<request_type::cancel_sub_pub>(std::move(topic), std::move(tags), 0);
+			this->write<msg_type::cancel_sub_pub>(std::move(topic), std::move(tags), 0);
 		}
 
 		//for reconnect
@@ -251,14 +251,14 @@ namespace lite_rpc {
 					tags.append(pair.first).append("||");
 				}
 				tags = tags.substr(0, tags.length() - 2);
-				write<request_type::sub_pub>(key, std::move(tags), 0);
+				write<msg_type::sub_pub>(key, std::move(tags), 0);
 			}
 			send();//at least has one msg in send_queue_
 		}
 
 	private:
 
-		template<request_type ReqType = request_type::req_res, typename String, typename BodyType>
+		template<msg_type MsgType = msg_type::req_res, typename String, typename BodyType>
 		void write(String&& name, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
@@ -317,7 +317,7 @@ namespace lite_rpc {
 			}
 
 			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)name.length());
+			make_head(pa.head, msg_id, (uint32_t)body_length, (uint8_t)name.length(), MsgType);
 			pa.name = std::move(name);
 
 			std::unique_lock<std::mutex> lock(send_queue_mtx_);
@@ -425,11 +425,11 @@ namespace lite_rpc {
 		}
 
 		void deal(const header& h) {
-			if (h.req_type == request_type::sub_pub) {
+			if (h.type == msg_type::sub_pub) {
 				auto topic = std::string(buf_.data(), h.name_length);
 				auto tag = std::string(buf_.data() + h.name_length, h.tag_length);
 #ifdef LITERPC_ENABLE_ZSTD
-				auto buf = decompress(compress_detail_, { buf_.data() + h.name_length + h.tag_length, h.body_length }, h.decompress_length);
+				auto buf = decompress(compress_detail_, { buf_.data() + h.name_length + h.tag_length, h.body_length });
 #else
 				auto buf = std::string_view{ buf_.data() + h.name_length + h.tag_length, h.body_length };
 #endif
@@ -451,7 +451,7 @@ namespace lite_rpc {
 			//req_res. head->name_length is 0
 			//Keepalived no response
 #ifdef LITERPC_ENABLE_ZSTD
-			auto buf = decompress(compress_detail_, { buf_.data(), h.body_length }, h.decompress_length);
+			auto buf = decompress(compress_detail_, { buf_.data(), h.body_length });
 #else
 			auto buf = std::string_view{ buf_.data(), h.body_length };
 #endif
@@ -469,7 +469,7 @@ namespace lite_rpc {
 		}
 
 		void keep_alived() {
-			write<request_type::keepalived>(std::string{}, std::string{}, 0);
+			write<msg_type::keepalived>(std::string{}, std::string{}, 0);
 		}
 	};
 

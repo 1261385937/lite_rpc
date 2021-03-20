@@ -22,45 +22,38 @@ constexpr auto COMPRESS_THRESHOLD = 1_k;//default 1K
 
 
 namespace lite_rpc {
-	constexpr auto MAX_BODY_SIZE = 128_k;
+	constexpr auto MAX_BODY_LENGTH = 8_m;
 
-	enum class protocol_major :uint8_t { //for protocol version
-		first
+	enum class magic_num :uint8_t { //for check valid head
+		first = 57,
+		second = 191
 	};
 
-	enum class protocol_minor :uint8_t { //for protocol version
-		zero
-	};
-
-	enum class request_type : uint8_t {
+	enum class msg_type : uint8_t {
 		req_res,
 		sub_pub,
 		cancel_sub_pub,
 		keepalived
 	};
 
-	struct header { //note byte align
+#pragma pack (1)
+	struct header {
 		uint64_t msg_id; //increase 1 by every request, use for client request callback.
-		protocol_major major;
-		protocol_minor minor;
-		uint16_t tag_length; //for subscribe tag
-		uint32_t decompress_length; //if decompress_length equal body_length means the body is not compressed.
 		uint32_t body_length;
-		request_type req_type;
-		uint8_t name_length = 0; //for remote method name or subscribe topic name
-		uint16_t reserve2 = 0; //unused, now for byte align
+		uint8_t name_length; //for remote method name or subscribe topic name.
+		msg_type type;
+		magic_num first = magic_num::first;
+		magic_num second = magic_num::second;
+		uint16_t tag_length; //for subscribe tag
 	};
+#pragma pack ()
 
-	inline void make_head_v1_0(header& h, uint32_t decompress_length, uint32_t body_len,
-		uint64_t id, request_type req_type, uint8_t name_length, uint16_t tag_length = 0)
+	inline void make_head(header& h, uint64_t msg_id, uint32_t body_len, uint8_t name_length, msg_type type, uint16_t tag_length = 0)
 	{
-		h.msg_id = id;
-		h.major = protocol_major::first;
-		h.minor = protocol_minor::zero;
-		h.decompress_length = decompress_length;
+		h.msg_id = msg_id;
 		h.body_length = body_len;
-		h.req_type = req_type;
 		h.name_length = name_length;
+		h.type = type;
 		h.tag_length = tag_length;
 	}
 
@@ -129,7 +122,7 @@ namespace lite_rpc {
 		}
 #endif
 	};
-	
+
 
 #ifdef LITERPC_ENABLE_ZSTD
 	template<typename SrcType>
@@ -175,22 +168,6 @@ namespace lite_rpc {
 		dst.resize(src_size);
 		auto compress_length = ZSTD_compressCCtx(detail.cctx, dst.data(), dst.length(), src.data(), src_size, 10);
 		return compress_length;
-	}
-
-	inline std::string_view decompress(compress_detail& detail, std::string_view src, size_t decompress_length)
-	{
-		auto src_size = src.length();
-		if (src_size == decompress_length) {
-			return src;
-		}
-
-		//need decompress
-		if (decompress_length > detail.buf.size()) {
-			detail.buf.resize(decompress_length);
-		}
-		auto origin_body_length = ZSTD_decompressDCtx(detail.dctx, detail.buf.data(), detail.buf.size(), src.data(), src_size);
-		assert(origin_body_length == decompress_length);
-		return{ detail.buf.data() ,origin_body_length };
 	}
 
 	inline std::string_view decompress(compress_detail& detail, std::string_view src) {

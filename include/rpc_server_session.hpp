@@ -68,6 +68,20 @@ namespace lite_rpc {
 			}
 		}
 
+		void free_rc() {
+			close_socket();
+			boost::system::error_code ignored_ec;
+			kick_timer_.cancel(ignored_ec);
+
+			//self remove subscribe which in rpc_server sub_conn_
+			for (const auto& pair : subscribe_keys_hash_) {
+				for (const auto& tag_hash : pair.second) {
+					server_->remove_subscribe(pair.first, tag_hash, this);
+				}
+			}
+			subscribe_keys_hash_.clear();
+		}
+
 		void go() {
 			//SPDLOG_INFO("get connection");
 			auto self(this->shared_from_this());
@@ -79,11 +93,17 @@ namespace lite_rpc {
 						kick_timer_.expires_from_now(std::chrono::seconds(10));
 						boost::asio::async_read(socket_, boost::asio::buffer(data, sizeof(header)), yield);
 						auto head = (header*)data;
+						if (head->first != magic_num::first || head->second != magic_num::second || head->body_length > MAX_BODY_LENGTH) {
+							free_rc(); //invalid head
+							return;
+						}
+
 						msg_id_ = head->msg_id;
 						auto length = head->name_length + head->body_length;
 						if (buf_.size() < length) {
 							buf_.resize(length);
 						}
+
 						if (length > 0) { //keepalived has no body
 							boost::asio::async_read(socket_, boost::asio::buffer(buf_.data(), length), yield);
 						}
@@ -92,16 +112,7 @@ namespace lite_rpc {
 				}
 				catch (std::exception&) {
 					//SPDLOG_ERROR("get exception:{}, so server close the connection, session address:{}", e.what(), (uint64_t)this);
-					close_socket();
-					boost::system::error_code ignored_ec;
-					kick_timer_.cancel(ignored_ec);
-
-					//self remove subscribe which in rpc_server sub_conn_
-					for (const auto& pair : subscribe_keys_hash_) {
-						for (const auto& tag_hash : pair.second) {
-							server_->remove_subscribe(pair.first, tag_hash, this);
-						}
-					}
+					free_rc();
 				}
 			});
 
@@ -110,7 +121,7 @@ namespace lite_rpc {
 				while (socket_.is_open()) {
 					kick_timer_.async_wait(yield[ignored_ec]);
 					if (kick_timer_.expires_from_now() <= std::chrono::seconds(0)) {
-						close_socket();
+						free_rc();
 						//SPDLOG_INFO("the connection is quiet over 10s, server close the connection, session address:{}", (uint64_t)this);
 					}
 				}
@@ -128,7 +139,7 @@ namespace lite_rpc {
 
 		template<typename BodyType>
 		void respond(BodyType&& data, uint64_t msg_id) {
-			this->write<request_type::req_res>(std::string{}, std::string{}, std::forward<BodyType>(data), msg_id);
+			this->write<msg_type::req_res>(std::string{}, std::string{}, std::forward<BodyType>(data), msg_id);
 		}
 
 		template<typename BodyType>
@@ -164,7 +175,7 @@ namespace lite_rpc {
 			return enable_publish_.load();
 		}
 
-		template<request_type ReqType, typename String_top, typename String_tag, typename BodyType>
+		template<msg_type MsgType, typename String_top, typename String_tag, typename BodyType>
 		static auto make_packet(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) {
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
@@ -223,7 +234,7 @@ namespace lite_rpc {
 #endif
 			}
 			pa.buf_size = (uint32_t)body_length;
-			make_head_v1_0(pa.head, (uint32_t)decompress_length, (uint32_t)body_length, msg_id, ReqType, (uint8_t)topic.length(), (uint16_t)tag.length());
+			make_head(pa.head, msg_id, (uint32_t)body_length, (uint8_t)topic.length(), MsgType, (uint16_t)tag.length());
 			pa.name = std::forward<String_top>(topic) + std::forward<String_tag>(tag);
 			return pa;
 		}
@@ -236,18 +247,18 @@ namespace lite_rpc {
 
 	private:
 		void deal(const header& head) {
-			if (head.req_type == request_type::keepalived) {
+			if (head.type == msg_type::keepalived) {
 				return; //no response
 			}
 
 			auto name = std::string(buf_.data(), head.name_length);
 #ifdef LITERPC_ENABLE_ZSTD
-			auto buf = decompress(compress_, { buf_.data() + head.name_length, head.body_length }, head.decompress_length);
+			auto buf = decompress(compress_, { buf_.data() + head.name_length, head.body_length });
 #else
 			auto buf = std::string_view{ buf_.data() + head.name_length, head.body_length };
 #endif
 			//sub_pub
-			if (head.req_type == request_type::sub_pub) {
+			if (head.type == msg_type::sub_pub) {
 				auto topic_hash = std::hash<std::string>()(name);
 				auto tags_hash = split_tag_hash(buf);
 				server_->add_subscribe(topic_hash, tags_hash, this);
@@ -269,7 +280,7 @@ namespace lite_rpc {
 			}
 
 			//cancel_sub_pub
-			if (head.req_type == request_type::cancel_sub_pub) {
+			if (head.type == msg_type::cancel_sub_pub) {
 				auto topic_hash = std::hash<std::string>()(name);
 				auto tags_hash = split_tag_hash(buf);
 				for (const auto& tag_hash : tags_hash) {
@@ -370,9 +381,9 @@ namespace lite_rpc {
 			send_queue_.pop_front();
 		}
 
-		template<request_type ReqType, typename String_top, typename String_tag, typename BodyType>
+		template<msg_type MsgType, typename String_top, typename String_tag, typename BodyType>
 		void write(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
-			auto pa = this->make_packet<ReqType>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), msg_id);
+			auto pa = this->make_packet<MsgType>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), msg_id);
 			std::unique_lock<std::mutex> lock(mtx_);
 			send_queue_.emplace_back(std::move(pa));
 			if (send_queue_.size() > 1) {
@@ -430,7 +441,7 @@ namespace lite_rpc {
 			}
 
 			header head{};
-			make_head_v1_0(head, (uint32_t)decompress_length, (uint32_t)buf.size(), msg_id, request_type::req_res, 0);
+			make_head(head, msg_id, (uint32_t)buf.size(), 0, msg_type::req_res);
 			std::vector<boost::asio::const_buffer> write_buffers;
 			write_buffers.emplace_back(boost::asio::buffer((char*)&head, sizeof(header)));
 			if (!buf.empty()) {
