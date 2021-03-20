@@ -33,8 +33,8 @@ namespace lite_rpc {
 			std::string name;
 			std::string inner_buf;
 			uint32_t buf_size;
-			char* ext_buf;
-			bool need_free = true;
+			char* ext_buf = nullptr;
+			bool need_free = false;
 		};
 		std::deque<packet> send_queue_;
 		std::mutex mtx_;
@@ -57,6 +57,15 @@ namespace lite_rpc {
 			server_(s)
 		{
 			buf_.resize(1_k);
+		}
+
+		~session()
+		{
+			for (auto&& p : send_queue_) {
+				if (p.ext_buf != nullptr) {
+					::free(p.ext_buf);
+				}
+			}
 		}
 
 		void go() {

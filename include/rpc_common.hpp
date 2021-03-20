@@ -22,8 +22,6 @@ constexpr auto COMPRESS_THRESHOLD = 1_k;//default 1K
 
 
 namespace lite_rpc {
-
-	inline const auto GLOBBING_HASH = std::hash<std::string>()("*");
 	constexpr auto MAX_BODY_SIZE = 128_k;
 
 	enum class protocol_major :uint8_t { //for protocol version
