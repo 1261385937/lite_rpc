@@ -36,8 +36,7 @@ namespace lite_rpc {
 			header head;
 			std::string name;
 			std::string inner_buf;
-			uint32_t buf_size;
-			char* ext_buf;
+			msgpack::sbuffer sbuf{ 0 };
 		};
 		std::mutex send_queue_mtx_;
 		std::deque<packet> send_queue_;
@@ -262,22 +261,22 @@ namespace lite_rpc {
 		void write(String&& name, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
-			size_t decompress_length = 0;
+			size_t ori_length = 0;
 			size_t body_length = 0;
 			packet pa{};
 
 			if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::vector<char>> || std::is_same_v<T, std::string_view>) { //do not need serialize
-				decompress_length = body.size();
+				ori_length = body.size();
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
 					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, body, pa.inner_buf);
 				}
 				else {
 #endif
-					body_length = decompress_length; //do not need compress, the length is same.
+					body_length = ori_length; //do not need compress, the length is same.
 					using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 					if constexpr (std::is_same_v<T, std::string>) {
-						pa.inner_buf = std::move(body);
+						pa.inner_buf = std::forward<BodyType>(body);
 					}
 					else {
 						pa.inner_buf = std::string(body.data(), body.size());
@@ -287,10 +286,10 @@ namespace lite_rpc {
 #endif
 			}
 			else if constexpr (lite_rpc::is_char_array_v<T>) {
-				decompress_length = sizeof(body) - 1;
+				ori_length = sizeof(body) - 1;
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, std::string_view{ body,decompress_length }, pa.inner_buf);
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, std::string_view{ body,ori_length }, pa.inner_buf);
 				}
 				else {
 #endif
@@ -302,21 +301,20 @@ namespace lite_rpc {
 			}
 			else { //need serialize
 				auto seri = serialize(std::forward<BodyType>(body));
-				decompress_length = seri.size();
+				ori_length = seri.size();
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
 					body_length = compress_with_mutex(compress_detail_.cctx, compress_detail_.compress_mtx, seri, pa.inner_buf);
 				}
 				else {
 #endif
-					body_length = decompress_length; //do not need compress, the length is same.
-					pa.ext_buf = seri.release();
+					body_length = ori_length; //do not need compress, the length is same.
+					pa.sbuf = std::move(seri);
 #ifdef LITERPC_ENABLE_ZSTD
 				}
 #endif
 			}
 
-			pa.buf_size = (uint32_t)body_length;
 			make_head(pa.head, msg_id, (uint32_t)body_length, (uint8_t)name.length(), MsgType);
 			pa.name = std::move(name);
 
@@ -373,11 +371,11 @@ namespace lite_rpc {
 			if (!msg.name.empty()) {
 				write_buffers[1] = boost::asio::buffer(msg.name.data(), msg.name.length());
 			}
-			if (msg.ext_buf != nullptr) {//ext serialize buf
-				write_buffers[2] = boost::asio::buffer(msg.ext_buf, msg.buf_size);
+			if (msg.sbuf.size() != 0) {//ext serialize buf
+				write_buffers[2] = boost::asio::buffer(msg.sbuf.data(), msg.sbuf.size());
 			}
 			else if (!msg.inner_buf.empty()) {
-				write_buffers[2] = boost::asio::buffer(msg.inner_buf.data(), msg.buf_size);
+				write_buffers[2] = boost::asio::buffer(msg.inner_buf.data(), msg.inner_buf.length());
 			}
 
 			boost::asio::async_write(socket_, write_buffers, [this, self = shared_from_this()](boost::system::error_code ec, std::size_t) {
@@ -402,9 +400,6 @@ namespace lite_rpc {
 
 				std::unique_lock<std::mutex> lock(send_queue_mtx_);
 				//printf("send handle_type:%d ok\n", send_queue_.front().head.handle_type);
-				if (send_queue_.front().ext_buf != nullptr) { //need free extra buf
-					::free(send_queue_.front().ext_buf);
-				}
 				send_queue_.pop_front();
 				if (!send_queue_.empty()) {
 					lock.unlock();
@@ -437,7 +432,7 @@ namespace lite_rpc {
 				auto iter = sub_cb_map_.find(topic);
 				if (iter == sub_cb_map_.end()) {
 					return;
-				}
+			}
 
 				auto& tag_func = iter->second;
 				//dispatch with tag
@@ -446,7 +441,7 @@ namespace lite_rpc {
 					tag_func_iter->second(buf);
 				}
 				return;
-			}
+		}
 
 			//req_res. head->name_length is 0
 			//Keepalived no response
@@ -466,11 +461,11 @@ namespace lite_rpc {
 			lock.unlock();
 
 			cb(buf);
-		}
+	}
 
 		void keep_alived() {
 			write<msg_type::keepalived>(std::string{}, std::string{}, 0);
 		}
-	};
+};
 
 }

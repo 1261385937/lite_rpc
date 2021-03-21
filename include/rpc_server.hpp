@@ -25,7 +25,6 @@ namespace lite_rpc {
 			:port_(port), session_rc_(rc)
 		{}
 
-		//optimize serialize and compress
 		template<typename BodyType>
 		void publish(std::string topic, std::string tag, BodyType&& body, bool check_verify = false) {
 			// do not get conn_set, then publish. Or maybe get invalid sess.
@@ -43,37 +42,21 @@ namespace lite_rpc {
 					return;
 				}
 
-				auto conn_count = tag_iter->second.size();
+				auto conns = tag_iter->second;
 				auto pa = session<Resource>::template make_packet<msg_type::sub_pub>(std::forward<decltype(args)>(args)...);
-				pa.need_free = false;
-				auto iter = tag_iter->second.begin();
+				auto pa_ptr = std::make_shared<decltype(pa)>(std::move(pa)); //need to use shared_ptr to share the data for all conns
 
 				if (!check_verify) {
-					for (size_t i = 0; i < conn_count - 1; i++) {
-						(*iter)->publish(pa);
-						++iter;
+					for (const auto& conn : conns) {
+						conn->publish(pa_ptr);
 					}
-					//deal the last conn
-					pa.need_free = true;
-					(*iter)->publish(std::move(pa));
 					return;
 				}
 
-				for (size_t i = 0; i < conn_count - 1; i++) {
-					if ((*iter)->publish_enable_status()) {
-						(*iter)->publish(pa);
+				for (const auto& conn : conns) {
+					if (conn->publish_enable_status()) {
+						conn->publish(pa_ptr);
 					}
-					++iter;
-				}
-				//deal the last conn
-				bool can_release = false; //has no vertify conn, free the ext_buf if not nullptr
-				pa.need_free = true;
-				if ((*iter)->publish_enable_status()) {
-					(*iter)->publish(std::move(pa));
-					can_release = true;
-				}
-				if (!can_release && pa.ext_buf != nullptr) {
-					::free(pa.ext_buf);
 				}
 			};
 

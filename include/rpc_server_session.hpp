@@ -32,12 +32,13 @@ namespace lite_rpc {
 			header head;
 			std::string name;
 			std::string inner_buf;
-			uint32_t buf_size;
-			char* ext_buf = nullptr;
-			bool need_free = false;
+			msgpack::sbuffer sbuf{ 0 };
 		};
 		std::deque<packet> send_queue_;
-		std::mutex mtx_;
+		std::mutex send_queue_mtx_;
+
+		std::deque<std::shared_ptr<packet>> pub_send_queue_;
+		std::mutex pub_send_queue_mtx_;
 
 		uint64_t msg_id_{};
 		boost::asio::yield_context* yield_{};
@@ -51,21 +52,11 @@ namespace lite_rpc {
 			: rc_(rc),
 			socket_(std::move(socket)),
 			kick_timer_(io_context),
-			//notify_timer_(io_context),
 			io_context_(io_context),
 			compress_(d),
 			server_(s)
 		{
 			buf_.resize(1_k);
-		}
-
-		~session()
-		{
-			for (auto&& p : send_queue_) {
-				if (p.ext_buf != nullptr) {
-					::free(p.ext_buf);
-				}
-			}
 		}
 
 		void free_rc() {
@@ -129,17 +120,14 @@ namespace lite_rpc {
 			});
 		}
 
-		void publish(packet&& p) {
-			this->publish_write(std::move(p));
-		}
-
-		void publish(const packet& p) {
-			this->publish_write(p);
+		template<typename PacketPtr>
+		void publish(PacketPtr&& p) {
+			this->publish_write(std::forward<PacketPtr>(p));
 		}
 
 		template<typename BodyType>
 		void respond(BodyType&& data, uint64_t msg_id) {
-			this->write<msg_type::req_res>(std::string{}, std::string{}, std::forward<BodyType>(data), msg_id);
+			this->write(std::string{}, std::string{}, std::forward<BodyType>(data), msg_id);
 		}
 
 		template<typename BodyType>
@@ -179,20 +167,20 @@ namespace lite_rpc {
 		static auto make_packet(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) {
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
-			size_t decompress_length = 0;
+			size_t ori_length = 0;
 			size_t body_length = 0;
 			packet pa{};
 
 			thread_local compress_detail deatil{};
 			if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::vector<char>> || std::is_same_v<T, std::string_view>) { //do not need serialize
-				decompress_length = body.size();
+				ori_length = body.size();
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
 					body_length = compress(deatil, body, pa.inner_buf);
 				}
 				else {
 #endif
-					body_length = decompress_length; //do not need compress, the length is same.
+					body_length = ori_length; //do not need compress, the length is same.
 					using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 					if constexpr (std::is_same_v<T, std::string>) {
 						pa.inner_buf = std::forward<BodyType>(body);
@@ -205,10 +193,10 @@ namespace lite_rpc {
 #endif
 			}
 			else if constexpr (lite_rpc::is_char_array_v<T>) {
-				decompress_length = sizeof(body) - 1;
+				ori_length = sizeof(body) - 1;
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
-					body_length = compress(deatil, std::string_view{ body, decompress_length }, pa.inner_buf);
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
+					body_length = compress(deatil, std::string_view{ body, ori_length }, pa.inner_buf);
 				}
 				else {
 #endif
@@ -220,20 +208,19 @@ namespace lite_rpc {
 			}
 			else { //need serialize
 				auto seri = serialize(std::forward<BodyType>(body));
-				decompress_length = seri.size();
+				ori_length = seri.size();
 #ifdef LITERPC_ENABLE_ZSTD
-				if (decompress_length >= COMPRESS_THRESHOLD) {//need compress
+				if (ori_length >= COMPRESS_THRESHOLD) {//need compress
 					body_length = compress(deatil, seri, pa.inner_buf);
 				}
 				else {
 #endif
-					body_length = decompress_length; //do not need compress, the length is same.
-					pa.ext_buf = seri.release();
+					body_length = ori_length; //do not need compress, the length is same.
+					pa.sbuf = std::move(seri);
 #ifdef LITERPC_ENABLE_ZSTD
 				}
 #endif
 			}
-			pa.buf_size = (uint32_t)body_length;
 			make_head(pa.head, msg_id, (uint32_t)body_length, (uint8_t)topic.length(), MsgType, (uint16_t)tag.length());
 			pa.name = std::forward<String_top>(topic) + std::forward<String_tag>(tag);
 			return pa;
@@ -311,22 +298,29 @@ namespace lite_rpc {
 			}
 		}
 
+		template<msg_type MsgType>
 		void send() //for one session ,producer maybe more than one, but consumer must be only one.
 		{
-			std::unique_lock<std::mutex> l(mtx_);
-			auto& msg = send_queue_.front();
-			l.unlock();
+			packet* msg{};
+			if constexpr (MsgType == msg_type::req_res) {
+				std::unique_lock<std::mutex> l(send_queue_mtx_);
+				msg = &(send_queue_.front());
+			}
+			else if constexpr (MsgType == msg_type::sub_pub) {
+				std::unique_lock<std::mutex> lock(pub_send_queue_mtx_);
+				msg = pub_send_queue_.front().get();
+			}
 
 			std::vector<boost::asio::const_buffer> write_buffers;
-			write_buffers.emplace_back(boost::asio::buffer((char*)&msg.head, sizeof(header)));
-			if (!msg.name.empty()) {
-				write_buffers.emplace_back(boost::asio::buffer(msg.name.data(), msg.name.length()));
+			write_buffers.emplace_back(boost::asio::buffer((char*)&msg->head, sizeof(header)));
+			if (!msg->name.empty()) {
+				write_buffers.emplace_back(boost::asio::buffer(msg->name.data(), msg->name.length()));
 			}
-			if (msg.ext_buf != nullptr) {//ext serialize buf
-				write_buffers.emplace_back(boost::asio::buffer(msg.ext_buf, msg.buf_size));
+			if (msg->sbuf.size() != 0) {//ext serialize buf
+				write_buffers.emplace_back(boost::asio::buffer(msg->sbuf.data(), msg->sbuf.size()));
 			}
-			else if (!msg.inner_buf.empty()) {
-				write_buffers.emplace_back(boost::asio::buffer(msg.inner_buf.data(), msg.buf_size));
+			else if (!msg->inner_buf.empty()) {
+				write_buffers.emplace_back(boost::asio::buffer(msg->inner_buf.data(), msg->inner_buf.length()));
 			}
 
 			boost::asio::async_write(socket_, write_buffers, [this, self = this->shared_from_this()](boost::system::error_code ec, std::size_t) {
@@ -336,20 +330,29 @@ namespace lite_rpc {
 					return;
 				}
 
-				std::unique_lock<std::mutex> lock(mtx_);
-				auto& pack = send_queue_.front();
-				if (pack.ext_buf != nullptr && pack.need_free) { //need free extra buf
-					::free(pack.ext_buf);
+				if constexpr (MsgType == msg_type::req_res) {
+					std::unique_lock<std::mutex> lock(send_queue_mtx_);
+					send_queue_.pop_front();
+					if (!send_queue_.empty()) {
+						lock.unlock();
+						this->send<MsgType>();
+					}
 				}
-				send_queue_.pop_front();
-				if (!send_queue_.empty()) {
-					lock.unlock();
-					this->send();
+				else if constexpr (MsgType == msg_type::sub_pub) {
+					std::unique_lock<std::mutex> lock(pub_send_queue_mtx_);
+					pub_send_queue_.pop_front();
+					if (!pub_send_queue_.empty()) {
+						lock.unlock();
+						this->send<MsgType>();
+					}
+				}
+				else {
+					static_assert(always_false_v<MsgType>, "func send error msg_type");
 				}
 			});
 		}
 
-		void coro_send(boost::asio::yield_context& yield, boost::system::error_code& ec) //for one session ,producer maybe more than one, but consumer must be only one.
+		/*void coro_send(boost::asio::yield_context& yield, boost::system::error_code& ec) //for one session ,producer maybe more than one, but consumer must be only one.
 		{
 			std::unique_lock<std::mutex> l(mtx_);
 			auto& msg = send_queue_.front();
@@ -379,31 +382,30 @@ namespace lite_rpc {
 				::free(pack.ext_buf);
 			}
 			send_queue_.pop_front();
-		}
+		}*/
 
-		template<msg_type MsgType, typename String_top, typename String_tag, typename BodyType>
+		template<typename String_top, typename String_tag, typename BodyType>
 		void write(String_top&& topic, String_tag&& tag, BodyType&& body, uint64_t msg_id) { //maybe multi_thread operator
-			auto pa = this->make_packet<MsgType>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), msg_id);
-			std::unique_lock<std::mutex> lock(mtx_);
+			auto pa = this->make_packet<msg_type::req_res>(std::forward<String_top>(topic), std::forward<String_tag>(tag), std::forward<BodyType>(body), msg_id);
+			std::unique_lock<std::mutex> lock(send_queue_mtx_);
 			send_queue_.emplace_back(std::move(pa));
 			if (send_queue_.size() > 1) {
 				return; //once write is begining, it will send all send_queue_ data  step by step.
 			}
 			lock.unlock();
-			send();
-			//notify_timer_.cancel_one();
+			this->send<msg_type::req_res>();
 		}
 
 		//avoid serialize and compress many times
-		template<typename Packet>
-		void publish_write(Packet&& pa) {
-			std::unique_lock<std::mutex> lock(mtx_);
-			send_queue_.emplace_back(std::forward<Packet>(pa));
-			if (send_queue_.size() > 1) {
+		template<typename PacketPtr>
+		void publish_write(PacketPtr&& p) {
+			std::unique_lock<std::mutex> lock(pub_send_queue_mtx_);
+			pub_send_queue_.emplace_back(std::forward<PacketPtr>(p));
+			if (pub_send_queue_.size() > 1) {
 				return; //once write is begining, it will send all send_queue_ data  step by step.
 			}
 			lock.unlock();
-			send();
+			this->send<msg_type::sub_pub>();
 		}
 
 		template<typename BodyType>
@@ -411,11 +413,11 @@ namespace lite_rpc {
 			using T = std::remove_cv_t<std::remove_reference_t<decltype(body)>>;
 			static_assert(!std::is_pointer_v<T>, "BodyType can not be a pointer");
 			std::string_view buf{};
-			size_t decompress_length = 0;
+			size_t ori_length = 0;
 			msgpack::sbuffer seri(0);
 
 			if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, std::string_view> || std::is_same_v<T, std::vector<char>>) { //do not need serialize
-				decompress_length = body.size();
+				ori_length = body.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				buf = compress(compress_, { body.data(), body.size() });
 #else
@@ -423,16 +425,16 @@ namespace lite_rpc {
 #endif
 			}
 			else if constexpr (lite_rpc::is_char_array_v<T>) {
-				decompress_length = sizeof(body) - 1;
+				ori_length = sizeof(body) - 1;
 #ifdef LITERPC_ENABLE_ZSTD
-				buf = compress(compress_, { body, decompress_length });
+				buf = compress(compress_, { body, ori_length });
 #else
-				buf = { body, decompress_length };
+				buf = { body, ori_length };
 #endif
 			}
 			else {
 				seri = serialize(std::forward<BodyType>(body));
-				decompress_length = seri.size();
+				ori_length = seri.size();
 #ifdef LITERPC_ENABLE_ZSTD
 				buf = compress(compress_, { seri.data(), seri.size() });
 #else
@@ -452,6 +454,6 @@ namespace lite_rpc {
 			if (ec) {
 				close_socket();
 			}
-		}
-	};
-}
+			}
+			};
+			}
