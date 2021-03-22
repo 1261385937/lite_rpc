@@ -40,9 +40,9 @@ namespace lite_rpc {
 	struct header {
 		uint64_t msg_id; //increase 1 by every request, use for client request callback.
 		uint32_t body_length;
+		magic_num first = magic_num::first;
 		uint8_t name_length; //for remote method name or subscribe topic name.
 		msg_type type;
-		magic_num first = magic_num::first;
 		magic_num second = magic_num::second;
 		uint16_t tag_length; //for subscribe tag
 	};

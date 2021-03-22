@@ -454,6 +454,6 @@ namespace lite_rpc {
 			if (ec) {
 				close_socket();
 			}
-			}
-			};
-			}
+		}
+	};
+}
