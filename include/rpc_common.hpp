@@ -4,6 +4,7 @@
 
 #include <typeinfo>
 #include <string>
+#include <mutex>
 #include "msgpack.hpp"
 
 constexpr decltype(auto) operator""_k(unsigned long long n) {
